@@ -10,7 +10,7 @@ A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/Comf
 
 Achieve identical embeddings from [`stable-diffusion-webui`](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [`ComfyUI`](https://github.com/comfyanonymous/ComfyUI).
 
-This means you can reproduce (or come close) to the same images generated on `stable-diffusion-webui` (and its forks) as on `ComfyUI`.
+This means you can reproduce (or come close to) the same images generated on `stable-diffusion-webui` (and its forks) as on `ComfyUI`.
 
 Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting generate _very similar_ images. I suspect the slight variations are due to how `ComfyUI` samples. `ComfyUI` also seems to generate slightly more saturated images.
 
@@ -32,7 +32,7 @@ git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 | Parser            | Explanation                                                                      |
 | ----------------- | -------------------------------------------------------------------------------- |
 | `comfy`           | The default way `ComfyUI` handles everything                                     |
-| `comfy++ `        | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does |
+| `comfy++`        | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does |
 | `A1111`           | The default parser used in `stable-diffusion-webui`                              |
 | `full`            | Same as `A1111` but whitespaces and newlines are stripped                        |
 | `compel`          | Uses [`compel`](https://github.com/damian0815/compel)                            |

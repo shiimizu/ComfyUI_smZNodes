@@ -4,7 +4,9 @@ A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/Comf
 
 ## CLIP Text Encode++
 
-
+<p align="center">
+<img width="290" alt="CLIP Text Encode++" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/fdb011a9-238e-47d0-a6ca-1188ef0d99f4">
+</p>
 
 Achieve identical embeddings from [`stable-diffusion-webui`](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [`ComfyUI`](https://github.com/comfyanonymous/ComfyUI).
 
@@ -15,7 +17,9 @@ Simple prompts generate _identical_ images. More complex prompts with complex at
 ### Installation
 Navigate to the **_ComfyUI/custom_nodes_** directory, and run:
 
-`git clone https://github.com/shiimizu/ComfyUI_smZNodes.git`
+```
+git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
+```
 
 ### Info
 

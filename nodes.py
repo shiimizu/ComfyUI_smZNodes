@@ -63,7 +63,7 @@ class smZ_CLIPTextEncode:
                 except Exception as error:
                     model_hijack.undo_hijack(clip)
                     raise error
-                return ([[cond, {}]], )
+                return ([[cond.to(device=clip.patcher.load_device), {}]], )
 
         result = run()
         # print("cond (+)" if multi_conditioning else "uncond (-)", result[0][0][0]) # debug

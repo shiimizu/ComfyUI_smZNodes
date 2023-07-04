@@ -56,7 +56,7 @@ class StableDiffusionModelHijack:
         m.cond_stage_model.tokenizer = m.tokenizer
 
         backup_embeds = m.cond_stage_model.transformer.get_input_embeddings()
-        device = backup_embeds.weight.device
+        device = self.clip_orig.patcher.load_device
         dtype = backup_embeds.weight.dtype
 
         model_embeddings = m.cond_stage_model.transformer.text_model.embeddings

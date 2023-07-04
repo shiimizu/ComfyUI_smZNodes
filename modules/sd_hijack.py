@@ -1,7 +1,7 @@
 import torch
 from types import MethodType
 from .sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
-
+from comfy.sd import CLIP
 
 class EmbeddingDatabase:
     def __init__(self):
@@ -52,20 +52,23 @@ class StableDiffusionModelHijack:
     #     self.embedding_db.add_embedding_dir(opts.embeddings_dir)
 
     def hijack(self, m):
+        self.clip_orig: CLIP = m.clone()
         m.cond_stage_model.tokenizer = m.tokenizer
 
         backup_embeds = m.cond_stage_model.transformer.get_input_embeddings()
         device = backup_embeds.weight.device
+        dtype = backup_embeds.weight.dtype
 
         model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
         model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
         model_embeddings.token_embedding.weight = backup_embeds.weight
         m.cond_stage_model = FrozenCLIPEmbedderWithCustomWords(m.cond_stage_model, self)
         m.cond_stage_model.device = device
+        model_embeddings.token_embedding.device = device
+        model_embeddings.token_embedding.dtype = dtype
 
         self.clip = m.cond_stage_model
 
-        # self.clip_orig = m
         # self.clip.device = self.clip.wrapped.device
         apply_weighted_forward(self.clip)
 
@@ -168,18 +171,12 @@ class EmbeddingsWithFixes(torch.nn.Module):
 
         vecs = []
                         
-        inputs_embeds.to(device="cpu")
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
-                # emb = devices.cond_cast_unet(embedding.vec) # no need to cast since comfy did it for us
-                emb = embedding.vec.to(device="cpu")
-                # emb = embedding.vec
+                # emb = devices.cond_cast_unet(embedding.vec) # sets the dtype like below
+                emb = embedding.vec.to(self.dtype, device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
-                try:
-                    tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
-                except:
-                    emb = embedding.vec.to(device=tensor.device)
-                    tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
+                tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
             vecs.append(tensor)
 
         return torch.stack(vecs)

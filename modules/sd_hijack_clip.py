@@ -6,6 +6,7 @@ from collections import namedtuple
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
 from . import shared
 from typing import List, Tuple
+from types import MethodType
 
 class PromptChunk:
     """
@@ -366,7 +367,7 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase,SD
         return tokenized
 
     def encode_with_transformers(self, tokens, return_pooled=False):
-        return self.encode_with_transformers_comfy(tokens, return_pooled)
+        return self.encode_from_tokens_comfy(tokens, return_pooled)
 
     def encode_with_transformers_original(self, tokens):
         clip_skip = opts.data['clip_skip'] or 1
@@ -378,12 +379,41 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase,SD
             z = outputs.last_hidden_state
         return z
     
-    # from sd1_clip.py: encode() -> forward() 
     def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]: 
+        '''
+        This function is different from `clip.cond_stage_model.encode_token_weights()` 
+        in that the tokens are `List[List[int]]`, not including the weights.
+
+        Originally from `sd1_clip.py`: `encode()` -> `forward()`
+        '''
         if type(tokens) == torch.Tensor:
             tokens = tokens.tolist()
         z, pooled = self.wrapped.encode(tokens)
         return (z, pooled) if return_pooled else z
+
+    def encode_from_tokens_comfy(self, tokens: List[List[int]], return_pooled=False):
+        '''
+        The function is our rendition of `clip.encode_from_tokens()`.
+        It still calls `clip.encode_from_tokens()` but hijacks the 
+        `clip.cond_stage_model.encode_token_weights()` method
+        so we can run our own version of `encode_token_weights()`
+
+        Originally from `sd.py`: `encode_from_tokens()`
+        '''
+        # note:
+        # self.wrapped = self.hijack.clip_orig.cond_stage_model 
+        ret = None
+        if type(tokens) == torch.Tensor:
+            tokens = tokens.tolist()
+        encode_token_weights_backup = self.hijack.clip_orig.cond_stage_model.encode_token_weights
+        try:
+            self.hijack.clip_orig.cond_stage_model.encode_token_weights = MethodType(self.encode_with_transformers_comfy, tokens)
+            ret = self.hijack.clip_orig.encode_from_tokens(tokens, return_pooled)
+            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
+        except Exception as error:
+            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
+            raise error
+        return ret
     
     def encode_embedding_init_text(self, init_text, nvpt):
         embedding_layer = self.wrapped.transformer.text_model.embeddings

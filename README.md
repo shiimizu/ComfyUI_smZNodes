@@ -32,17 +32,18 @@ git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 | Parser            | Explanation                                                                      |
 | ----------------- | -------------------------------------------------------------------------------- |
 | `comfy`           | The default way `ComfyUI` handles everything                                     |
-| `comfy++`        | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does |
+| `comfy++`        | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does, allowing to take the mean as they do. |
 | `A1111`           | The default parser used in `stable-diffusion-webui`                              |
 | `full`            | Same as `A1111` but whitespaces and newlines are stripped                        |
 | `compel`          | Uses [`compel`](https://github.com/damian0815/compel)                            |
 | `fixed attention` | Prompt is untampered with                                                        |
 
->**Note**
+>**Note**:
 >Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
 ### Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion.
+- Use the same seed and sampler settings.
 - Use non-ancestral samplers.
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.

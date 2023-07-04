@@ -5,7 +5,7 @@ from types import MethodType
 from .modules.shared import opts
 import torch
 
-def encode_from_tokens_with_mean(clip: CLIP, tokens, return_pooled=False):
+def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
     '''
     The function is our rendition of `clip.encode_from_tokens()`.
     It still calls `clip.encode_from_tokens()` but hijacks the 
@@ -17,7 +17,7 @@ def encode_from_tokens_with_mean(clip: CLIP, tokens, return_pooled=False):
     ret = None
     encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
     try:
-        clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_with_mean, clip.cond_stage_model)
+        clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
         ret = clip.encode_from_tokens(tokens, return_pooled)
         clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
     except Exception as error:
@@ -26,7 +26,7 @@ def encode_from_tokens_with_mean(clip: CLIP, tokens, return_pooled=False):
 
     return ret
 
-def encode_token_weights_with_mean(self: SD1ClipModel, token_weight_pairs):
+def encode_token_weights_customized(self: SD1ClipModel, token_weight_pairs):
     to_encode = list(self.empty_tokens)
     for x in token_weight_pairs:
         tokens = list(map(lambda a: a[0], x))

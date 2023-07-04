@@ -1,7 +1,7 @@
 from .modules import prompt_parser
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_tokens_with_mean
+from .smZNodes import encode_from_tokens_with_custom_mean
 from comfy.sd import CLIP
 
 class smZ_CLIPTextEncode:
@@ -40,7 +40,7 @@ class smZ_CLIPTextEncode:
                 pooled=None
                 tokens = clip.tokenize(text)
                 if parser == "comfy++":
-                    cond, pooled = encode_from_tokens_with_mean(clip, tokens, return_pooled=True)
+                    cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
                 else:
                     cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
                 return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )

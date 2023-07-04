@@ -174,7 +174,7 @@ class EmbeddingsWithFixes(torch.nn.Module):
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
                 # emb = devices.cond_cast_unet(embedding.vec) # sets the dtype like below
-                emb = embedding.vec.to(self.dtype, device=tensor.device)
+                emb = embedding.vec.to(dtype=self.dtype, device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
                 tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
             vecs.append(tensor)

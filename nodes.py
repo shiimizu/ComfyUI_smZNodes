@@ -2,6 +2,7 @@ from .modules import prompt_parser
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
 from .smZNodes import encode_from_tokens_with_mean
+from comfy.sd import CLIP
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -18,7 +19,7 @@ class smZ_CLIPTextEncode:
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
-    def encode(self, clip, text, parser, mean_normalization, multi_conditioning, prompt=None):
+    def encode(self, clip: CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool):
         opts.data['prompt_mean_norm'] = mean_normalization
 
         def run():
@@ -37,34 +38,35 @@ class smZ_CLIPTextEncode:
             
             if "comfy" in parser:
                 pooled=None
-                tokenized = clip.tokenize(text, return_word_ids=mean_normalization)
+                tokens = clip.tokenize(text)
                 if parser == "comfy++":
-                    cond, pooled = encode_from_tokens_with_mean(clip, tokenized, return_pooled=True)
+                    cond, pooled = encode_from_tokens_with_mean(clip, tokens, return_pooled=True)
                 else:
-                    cond, pooled = clip.encode_from_tokens(tokenized, return_pooled=True)
+                    cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
                 return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
             else:
                 # not necessary since we use a different transform function
-                opts.data['clip_skip'] = abs(clip.layer_idx)
+                opts.data['clip_skip'] = abs(clip.layer_idx or 1)
                 
                 texts = [text]
                 model_hijack.hijack(clip)
+                steps = 1
                 try:
                     # from A1111's processing.py and sd_samplers_kdiffusion.py
                     if multi_conditioning:
-                        c = prompt_parser.get_multicond_learned_conditioning(clip.cond_stage_model, texts, 1)
-                        conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, 1)
+                        c = prompt_parser.get_multicond_learned_conditioning(clip.cond_stage_model, texts, steps)
+                        conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
                     else:
-                        uc = prompt_parser.get_learned_conditioning(clip.cond_stage_model, texts, 1)
-                        cond = prompt_parser.reconstruct_cond_batch(uc, 1)
+                        uc = prompt_parser.get_learned_conditioning(clip.cond_stage_model, texts, steps)
+                        cond = prompt_parser.reconstruct_cond_batch(uc, steps)
                     model_hijack.undo_hijack(clip)
                 except Exception as error:
                     model_hijack.undo_hijack(clip)
                     raise error
                 return ([[cond, {}]], )
-        
+
         result = run()
-        # print("cond (+)" if multi_conditioning else "uncond (-)",  result[0][0][0]) # debug
+        # print("cond (+)" if multi_conditioning else "uncond (-)", result[0][0][0]) # debug
         return result
 
 # A dictionary that contains all nodes you want to export with their names

@@ -6,8 +6,14 @@ from .modules.shared import opts
 import torch
 
 def encode_from_tokens_with_mean(clip: CLIP, tokens, return_pooled=False):
-    # hijack clip.cond_stage_model.encode_token_weights() method
-    # so we can run clip.encode_from_tokens() with our own encode_token_weights()
+    '''
+    The function is our rendition of `clip.encode_from_tokens()`.
+    It still calls `clip.encode_from_tokens()` but hijacks the 
+    `clip.cond_stage_model.encode_token_weights()` method
+    so we can run our own version of `encode_token_weights()`
+
+    Originally from `sd.py`: `encode_from_tokens()`
+    '''
     ret = None
     encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
     try:

@@ -14,7 +14,10 @@ from typing import List
 import lark
 import torch
 from compel import Compel
-from .shared import opts, log
+if __name__ == "__main__":
+    from shared import opts, log
+else:
+    from .shared import opts, log
 # from torch.nn.utils.rnn import pad_sequence
 # import numpy as np
 

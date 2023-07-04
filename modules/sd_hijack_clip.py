@@ -307,8 +307,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         Multipliers are used to give more or less weight to the outputs of transformers network. Each multiplier
         corresponds to one token.
         """
-        device = self.device
-        tokens = torch.asarray(remade_batch_tokens).to(device)
+        tokens = torch.asarray(remade_batch_tokens)
         # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
         if self.id_end != self.id_pad:
             for batch_pos in range(len(remade_batch_tokens)):
@@ -316,6 +315,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                 tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
 
         z = self.encode_with_transformers(tokens)
+        device = z.device
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         batch_multipliers = torch.asarray(batch_multipliers).to(device)
         if opts.prompt_mean_norm:

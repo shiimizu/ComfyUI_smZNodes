@@ -4,7 +4,7 @@ from comfy.sd1_clip import SD1ClipModel
 from typing import List, Tuple
 from types import MethodType
 from .modules import prompt_parser
-from .modules import shared
+from .modules import shared, devices
 from .modules.shared import opts
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
@@ -189,11 +189,12 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
                     embedding_name_verbose = word[emb_idx:].strip('\n')
                     embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
                     embed, leftover = self._try_get_embedding(embedding_name.strip())
+                    embed = embed.to(device=devices.device)
 
                     if embed is None:
                         print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
-                        self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self)
+                        self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
                         if len(embed.shape) == 1:
                             # tokens.append([(embed, weight)])
                             tmp += [(embed, weight)]

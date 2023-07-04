@@ -12,11 +12,11 @@ class EmbeddingDatabase:
         self.expected_shape = -1
         self.embedding_dirs = {}
         self.previously_displayed_embeddings = ()
+
     def register_embedding(self, embedding, model):
         self.word_embeddings[embedding.name] = embedding
 
-        # ids = model.cond_stage_model.tokenize([embedding.name])[0]
-        ids = model.tokenizer([embedding.name])["input_ids"][0][1:-1]
+        ids = model.cond_stage_model.tokenize([embedding.name])[0]
 
         first_id = ids[0]
         if first_id not in self.ids_lookup:
@@ -25,6 +25,7 @@ class EmbeddingDatabase:
         self.ids_lookup[first_id] = sorted(self.ids_lookup[first_id] + [(ids, embedding)], key=lambda x: len(x[0]), reverse=True)
 
         return embedding
+
     def find_embedding_at_position(self, tokens, offset):
         token = tokens[offset]
         possible_matches = self.ids_lookup.get(token, None)
@@ -62,6 +63,7 @@ class StableDiffusionModelHijack:
         model_embeddings.token_embedding.weight = backup_embeds.weight
 
         m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
+        self.cond_stage_model = m.cond_stage_model
 
         # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
         # The is no `get_learned_conditioning()` so we add it, but make it
@@ -84,6 +86,7 @@ class StableDiffusionModelHijack:
         self.apply_circular(False)
         # self.layers = None
         self.clip = None
+        self.cond_stage_model = None
 
     def apply_circular(self, enable):
         if self.circular_enabled == enable:

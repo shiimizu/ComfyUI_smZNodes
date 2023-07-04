@@ -18,8 +18,6 @@ if __name__ == "__main__":
     from shared import opts, log
 else:
     from .shared import opts, log
-# from torch.nn.utils.rnn import pad_sequence
-# import numpy as np
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][ in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -166,13 +164,7 @@ def get_learned_conditioning(model, prompts, steps):
         ]
     ]
     """
-    # import os
-    # import inspect
-    # print("PROMPT_PARSER model", type(model), model)
-    # print("PROMPT_PARSER get_learned_conditioning", os.path.abspath(inspect.getfile(model.get_learned_conditioning)))
-
     res = []
-    # output = []
     prompt_schedules = get_learned_conditioning_prompt_schedules(prompts, steps)
     cache = {}
     for prompt, prompt_schedule in zip(prompts, prompt_schedules):
@@ -182,19 +174,13 @@ def get_learned_conditioning(model, prompts, steps):
             res.append(cached)
             continue
         texts = [x[1] for x in prompt_schedule]
-        # @ sd.py # get_learned_conditioning(texts) -> self.cond_stage_model.encode(c) -> .forward()
-        conds = model.forward(texts)
+        conds = model.get_learned_conditioning(texts)
         cond_schedule = []
         for i, (end_at_step, _text) in enumerate(prompt_schedule):
-            condsi = conds[i]
-            # output += [condsi]
-            cond_schedule.append(ScheduledPromptConditioning(end_at_step, condsi))
+            cond_schedule.append(ScheduledPromptConditioning(end_at_step, conds[i]))
         cache[prompt] = cond_schedule
         res.append(cond_schedule)
     return res
-    # return res[0][0].cond #, first_pooled.cpu() # from encode_token_weights()
-    # return torch.cat(output, dim=-2).cpu() #, first_pooled.cpu() # from encode_token_weights()
-
 
 
 def get_multicond_prompt_list(prompts):

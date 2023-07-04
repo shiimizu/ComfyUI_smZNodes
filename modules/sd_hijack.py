@@ -1,7 +1,8 @@
 import torch
 from types import MethodType
-from .sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
 from comfy.sd import CLIP
+from . import devices
+from ..smZNodes import FrozenCLIPEmbedderWithCustomWordsCustom, get_learned_conditioning
 
 class EmbeddingDatabase:
     def __init__(self):
@@ -53,23 +54,24 @@ class StableDiffusionModelHijack:
 
     def hijack(self, m):
         self.clip_orig: CLIP = m.clone()
-        m.cond_stage_model.tokenizer = m.tokenizer
-
         backup_embeds = m.cond_stage_model.transformer.get_input_embeddings()
-        device = self.clip_orig.patcher.load_device
-        dtype = backup_embeds.weight.dtype
+
 
         model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
         model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
         model_embeddings.token_embedding.weight = backup_embeds.weight
-        m.cond_stage_model = FrozenCLIPEmbedderWithCustomWords(m.cond_stage_model, self)
-        m.cond_stage_model.device = device
-        model_embeddings.token_embedding.device = device
-        model_embeddings.token_embedding.dtype = dtype
+
+        m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
+
+        # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
+        # The is no `get_learned_conditioning()` so we add it, but make it
+        # use our `m.cond_stage_model.forward()` which runs `torch.nn.Module`'s `forward()` function
+        # from `FrozenCLIPEmbedderWithCustomWordsBase`
+        m.cond_stage_forward = "forward"
+        m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
 
         self.clip = m.cond_stage_model
 
-        # self.clip.device = self.clip.wrapped.device
         apply_weighted_forward(self.clip)
 
     def undo_hijack(self, m):
@@ -149,11 +151,9 @@ def undo_weighted_forward(sd_model):
         del sd_model.weighted_forward
     except AttributeError:
         pass
-    
+
 
 class EmbeddingsWithFixes(torch.nn.Module):
-# class EmbeddingsWithFixes(torch.nn.Embedding):
-
     def __init__(self, wrapped, embeddings):
         super().__init__()
         self.wrapped = wrapped
@@ -170,11 +170,10 @@ class EmbeddingsWithFixes(torch.nn.Module):
             return inputs_embeds
 
         vecs = []
-                        
+
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
-                # emb = devices.cond_cast_unet(embedding.vec) # sets the dtype like below
-                emb = embedding.vec.to(dtype=self.dtype, device=tensor.device)
+                emb = devices.cond_cast_unet(embedding.vec)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
                 tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
             vecs.append(tensor)

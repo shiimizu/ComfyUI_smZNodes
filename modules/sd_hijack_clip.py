@@ -1,12 +1,9 @@
 import math
-import torch
-from . import prompt_parser
-from .shared import opts
 from collections import namedtuple
-from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
-from . import shared
-from typing import List, Tuple
-from types import MethodType
+import torch
+from . import prompt_parser, devices, sd_hijack
+from .shared import opts
+
 
 class PromptChunk:
     """
@@ -23,67 +20,20 @@ class PromptChunk:
 
 PromptChunkFix = namedtuple('PromptChunkFix', ['offset', 'embedding'])
 """An object of this type is a marker showing that textual inversion embedding's vectors have to placed at offset in the prompt
-chunk. Those objects are found in PromptChunk.fixes and, are placed into FrozenCLIPEmbedderWithCustomWordsBase.hijack.fixes, and finally
+chunk. Thos objects are found in PromptChunk.fixes and, are placed into FrozenCLIPEmbedderWithCustomWordsBase.hijack.fixes, and finally
 are applied by sd_hijack.EmbeddingsWithFixes's forward function."""
-
-
-class Embedding:
-    def __init__(self, vec, name, step=None):
-        self.vec = vec
-        self.name = name
-        self.step = step
-        self.shape = None
-        self.vectors = 0
-        self.cached_checksum = None
-        self.sd_checkpoint = None
-        self.sd_checkpoint_name = None
-        self.optimizer_state_dict = None
-        self.filename = None
-
-    def save(self, filename):
-        embedding_data = {
-            "string_to_token": {"*": 265},
-            "string_to_param": {"*": self.vec},
-            "name": self.name,
-            "step": self.step,
-            "sd_checkpoint": self.sd_checkpoint,
-            "sd_checkpoint_name": self.sd_checkpoint_name,
-        }
-
-        torch.save(embedding_data, filename)
-
-        if shared.opts.save_optimizer_state and self.optimizer_state_dict is not None:
-            optimizer_saved_dict = {
-                'hash': self.checksum(),
-                'optimizer_state_dict': self.optimizer_state_dict,
-            }
-            torch.save(optimizer_saved_dict, f"{filename}.optim")
-
-    def checksum(self):
-        if self.cached_checksum is not None:
-            return self.cached_checksum
-
-        def const_hash(a):
-            r = 0
-            for v in a:
-                r = (r * 281 ^ int(v) * 997) & 0xFFFFFFFF
-            return r
-
-        self.cached_checksum = f'{const_hash(self.vec.reshape(-1) * 100) & 0xffff:04x}'
-        return self.cached_checksum
 
 
 class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
     """A pytorch module that is a wrapper for FrozenCLIPEmbedder module. it enhances FrozenCLIPEmbedder, making it possible to
     have unlimited prompt length and assign weights to tokens in prompt.
     """
-    def __init__(self, wrapped: SD1ClipModel, hijack):
+    def __init__(self, wrapped, hijack):
         super().__init__()
         self.wrapped = wrapped
         """Original FrozenCLIPEmbedder module; can also be FrozenOpenCLIPEmbedder or xlmr.BertSeriesModelWithTransformation,
         depending on model."""
-        self.hijack = hijack
-        # self.hijack: sd_hijack.StableDiffusionModelHijack = hijack
+        self.hijack: sd_hijack.StableDiffusionModelHijack = hijack
         self.chunk_length = 75
 
     def empty_chunk(self):
@@ -122,69 +72,6 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         represent the prompt.
         Returns the list and the total number of tokens in the prompt.
         """
-
-        # This function has been added to apply embeddings
-        # from sd1_clip.py @ tokenize_with_weights()
-        def parse_and_register_embeddings(text: str, return_word_ids=False):
-            '''
-            Takes a prompt and converts it to a list of (token, weight, word id) elements.
-            Tokens can both be integer tokens and pre computed CLIP tensors.
-            Word id values are unique per word and embedding, where the id 0 is reserved for non word tokens.
-            Returned list has the dimensions NxM where M is the input size of CLIP
-            '''
-            if self.pad_with_end:
-                pad_token = self.end_token
-            else:
-                pad_token = 0
-
-            text = escape_important(text)
-            # parsed_weights = token_weights(text, 1.0)
-            parsed = prompt_parser.parse_prompt_attention(text)
-            parsed_weights = [tuple(tw) for tw in parsed]
-
-            #tokenize words
-            tokens = []
-            for weighted_segment, weight in parsed_weights:
-                to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
-                to_tokenize = [x for x in to_tokenize if x != ""]
-                # to_tokenize = [x for x in weighted_segment if x != ""]
-
-                tmp=[]
-                # print(word)
-                for word in to_tokenize:
-                    #if we find an embedding, deal with the embedding
-                    emb_idx = word.find(self.embedding_identifier)
-                    # word.startswith(self.embedding_identifier)
-                    if emb_idx != -1 and self.embedding_directory is not None:
-                        embedding_name = word[len(self.embedding_identifier):].strip('\n')
-                        
-                        embedding_name_verbose = word[emb_idx:].strip('\n')
-                        embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
-                        embed, leftover = self._try_get_embedding(embedding_name.strip())
-
-                        if embed is None:
-                            print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-                        else:
-                            self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self)
-                            if len(embed.shape) == 1:
-                                # tokens.append([(embed, weight)])
-                                tmp += [(embed, weight)]
-                            else:
-                                # tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
-                                tmp += [(embed[x], weight) for x in range(embed.shape[0])]
-                        #if we accidentally have leftover text, continue parsing using leftover, else move on to next word
-                        if leftover != "":
-                            word = leftover
-                        else:
-                            continue
-                    #parse word
-                    # tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][1:-1]])
-                    tmp += [(word, weight)]
-                    # tokens.append(tmp)
-                    tokens += tmp
-            return tokens
-        
-        parse_and_register_embeddings(line) # register embeddings, discard return
         parsed = prompt_parser.parse_prompt_attention(line)
         tokenized = self.tokenize([text for text, _ in parsed])
         chunks = []
@@ -234,8 +121,6 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                     chunk.multipliers = reloc_mults
                 if len(chunk.tokens) == self.chunk_length:
                     next_chunk()
-                embedding = None
-                embedding_length_in_tokens=0
                 embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, position)
                 if embedding is None:
                     chunk.tokens.append(token)
@@ -307,8 +192,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         Multipliers are used to give more or less weight to the outputs of transformers network. Each multiplier
         corresponds to one token.
         """
-        device = self.device
-        tokens = torch.asarray(remade_batch_tokens).to(device)
+        tokens = torch.asarray(remade_batch_tokens).to(devices.device)
         # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
         if self.id_end != self.id_pad:
             for batch_pos in range(len(remade_batch_tokens)):
@@ -317,7 +201,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         z = self.encode_with_transformers(tokens)
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
-        batch_multipliers = torch.asarray(batch_multipliers).to(device)
+        batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
         if opts.prompt_mean_norm:
             original_mean = z.mean()
             z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
@@ -327,19 +211,11 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
         return z
 
-# inherit SD1Tokenizer to have _try_get_embedding() method
-class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase,SD1Tokenizer):
-    def populate_self_variables(self, from_):
-        super_attrs = vars(from_)
-        self_attrs = vars(self)
-        self_attrs.update(super_attrs)
-    
-    def __init__(self, wrapped: SD1ClipModel, hijack):
+
+class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
+    def __init__(self, wrapped, hijack):
         super().__init__(wrapped, hijack)
-        # SD1Tokenizer.__init__(self)
-        self.clip = hijack.clip
-        self.populate_self_variables(wrapped.tokenizer)
-        # self.tokenizer = self.tokenizer.tokenizer # CLIPTokenizer.from_pretrained(tokenizer_path)
+        self.tokenizer = wrapped.tokenizer
         vocab = self.tokenizer.get_vocab()
         self.comma_token = vocab.get(',</w>', None)
         self.token_mults = {}
@@ -357,19 +233,15 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase,SD
                     mult /= 1.1
             if mult != 1.0:
                 self.token_mults[ident] = mult
-        self.id_start = self.tokenizer.bos_token_id
-        self.id_end = self.tokenizer.eos_token_id
+        self.id_start = self.wrapped.tokenizer.bos_token_id
+        self.id_end = self.wrapped.tokenizer.eos_token_id
         self.id_pad = self.id_end
-        self.embedding_identifier_tokenized = self.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
 
     def tokenize(self, texts):
-        tokenized=self.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
+        tokenized = self.wrapped.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
         return tokenized
 
-    def encode_with_transformers(self, tokens, return_pooled=False):
-        return self.encode_from_tokens_comfy(tokens, return_pooled)
-
-    def encode_with_transformers_original(self, tokens):
+    def encode_with_transformers(self, tokens):
         clip_skip = opts.data['clip_skip'] or 1
         outputs = self.wrapped.transformer(input_ids=tokens, output_hidden_states=-clip_skip)
         if clip_skip > 1:
@@ -378,45 +250,9 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase,SD
         else:
             z = outputs.last_hidden_state
         return z
-    
-    def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]: 
-        '''
-        This function is different from `clip.cond_stage_model.encode_token_weights()` 
-        in that the tokens are `List[List[int]]`, not including the weights.
 
-        Originally from `sd1_clip.py`: `encode()` -> `forward()`
-        '''
-        if type(tokens) == torch.Tensor:
-            tokens = tokens.tolist()
-        z, pooled = self.wrapped.encode(tokens)
-        return (z, pooled) if return_pooled else z
-
-    def encode_from_tokens_comfy(self, tokens: List[List[int]], return_pooled=False):
-        '''
-        The function is our rendition of `clip.encode_from_tokens()`.
-        It still calls `clip.encode_from_tokens()` but hijacks the 
-        `clip.cond_stage_model.encode_token_weights()` method
-        so we can run our own version of `encode_token_weights()`
-
-        Originally from `sd.py`: `encode_from_tokens()`
-        '''
-        # note:
-        # self.wrapped = self.hijack.clip_orig.cond_stage_model 
-        ret = None
-        if type(tokens) == torch.Tensor:
-            tokens = tokens.tolist()
-        encode_token_weights_backup = self.hijack.clip_orig.cond_stage_model.encode_token_weights
-        try:
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = MethodType(self.encode_with_transformers_comfy, tokens)
-            ret = self.hijack.clip_orig.encode_from_tokens(tokens, return_pooled)
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        except Exception as error:
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
-            raise error
-        return ret
-    
     def encode_embedding_init_text(self, init_text, nvpt):
         embedding_layer = self.wrapped.transformer.text_model.embeddings
-        ids = self.tokenizer(init_text, max_length=nvpt, return_tensors="pt", add_special_tokens=False)["input_ids"]
+        ids = self.wrapped.tokenizer(init_text, max_length=nvpt, return_tensors="pt", add_special_tokens=False)["input_ids"]
         embedded = embedding_layer.token_embedding.wrapped(ids.to(embedding_layer.token_embedding.wrapped.weight.device)).squeeze(0)
         return embedded

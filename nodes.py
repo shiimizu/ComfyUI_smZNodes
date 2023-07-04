@@ -1,4 +1,4 @@
-from .modules import prompt_parser
+from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
 from .smZNodes import encode_from_tokens_with_custom_mean
@@ -21,6 +21,7 @@ class smZ_CLIPTextEncode:
 
     def encode(self, clip: CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool):
         opts.data['prompt_mean_norm'] = mean_normalization
+        devices.device = clip.patcher.load_device
 
         def run():
             if parser == "full":
@@ -35,7 +36,7 @@ class smZ_CLIPTextEncode:
                 opts.data['prompt_attention'] = "Comfy++ parser"
             else:
                 opts.data['prompt_attention'] = "Comfy parser"
-            
+
             if "comfy" in parser:
                 pooled=None
                 tokens = clip.tokenize(text)
@@ -47,23 +48,20 @@ class smZ_CLIPTextEncode:
             else:
                 # not necessary since we use a different transform function
                 opts.data['clip_skip'] = abs(clip.layer_idx or 1)
-                
+
                 texts = [text]
-                model_hijack.hijack(clip)
+                clip_clone = clip.clone()
+                model_hijack.hijack(clip_clone)
                 steps = 1
-                try:
-                    # from A1111's processing.py and sd_samplers_kdiffusion.py
-                    if multi_conditioning:
-                        c = prompt_parser.get_multicond_learned_conditioning(clip.cond_stage_model, texts, steps)
-                        conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
-                    else:
-                        uc = prompt_parser.get_learned_conditioning(clip.cond_stage_model, texts, steps)
-                        cond = prompt_parser.reconstruct_cond_batch(uc, steps)
-                    model_hijack.undo_hijack(clip)
-                except Exception as error:
-                    model_hijack.undo_hijack(clip)
-                    raise error
-                return ([[cond.to(device=clip.patcher.load_device), {}]], )
+                # from A1111's processing.py and sd_samplers_kdiffusion.py
+                if multi_conditioning:
+                    c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
+                else:
+                    uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    cond = prompt_parser.reconstruct_cond_batch(uc, steps)
+                model_hijack.undo_hijack(clip_clone)
+                return ([[cond.to(device=devices.device), {}]], )
 
         result = run()
         # print("cond (+)" if multi_conditioning else "uncond (-)", result[0][0][0]) # debug

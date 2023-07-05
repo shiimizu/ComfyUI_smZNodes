@@ -189,11 +189,11 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
                     embedding_name_verbose = word[emb_idx:].strip('\n')
                     embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
                     embed, leftover = self._try_get_embedding(embedding_name.strip())
-                    embed = embed.to(device=devices.device)
 
                     if embed is None:
                         print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
+                        embed = embed.to(device=devices.device)
                         self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
                         if len(embed.shape) == 1:
                             # tokens.append([(embed, weight)])

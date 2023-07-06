@@ -2,7 +2,7 @@
 # smZNodes
 A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). There is only one at the moment.
 
-## CLIP Text Encode++
+# CLIP Text Encode++
 
 <p align="center">
 <img width="290" alt="CLIP Text Encode++" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/fdb011a9-238e-47d0-a6ca-1188ef0d99f4">
@@ -14,14 +14,14 @@ This means you can reproduce (or come close to) the same images generated on `st
 
 Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting generate _very similar_ images. I suspect the slight variations are due to how `ComfyUI` samples. `ComfyUI` also seems to generate slightly more saturated images.
 
-### Installation
+## Installation
 Navigate to the **_ComfyUI/custom_nodes_** directory, and run:
 
 ```
 git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 ```
 
-### Info
+## Options
 
 | Options              | Explanation                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@ git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 >**Note**:
 >Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
-### Tips to get reproducible results on both UIs
+## Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion.
 - Use the same seed and sampler settings.
 - Use non-ancestral samplers.

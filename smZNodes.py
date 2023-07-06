@@ -49,10 +49,10 @@ def encode_token_weights_customized(self: SD1ClipModel, token_weight_pairs):
         first_pooled = pooled[0:1]
 
     output = []
-    for i in range(1, out.shape[0]):
+    for k in range(1, out.shape[0]):
         # 3D -> 2D
-        z = out[i:i+1]
-        batch_multipliers = zw[i:i+1]
+        z = out[k:k+1]
+        batch_multipliers = zw[k:k+1]
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         if opts.prompt_mean_norm:
             original_mean = z.mean()
@@ -63,7 +63,7 @@ def encode_token_weights_customized(self: SD1ClipModel, token_weight_pairs):
             z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
             # for i in range(len(z)):
             #     for j in range(len(z[i])):
-            #         weight = token_weight_pairs[i - 1][j][1]
+            #         weight = token_weight_pairs[k - 1][j][1]
             #         z[i][j] = (z[i][j] - z_empty[0][j]) * weight + z_empty[0][j]
         output.append(z)
 

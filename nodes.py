@@ -1,8 +1,9 @@
 from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_tokens_with_custom_mean
+from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
 from comfy.sd import CLIP
+import torch
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -37,8 +38,8 @@ class smZ_CLIPTextEncode:
             else:
                 opts.data['prompt_attention'] = "Comfy parser"
 
+            pooled=None
             if "comfy" in parser:
-                pooled=None
                 tokens = clip.tokenize(text)
                 if parser == "comfy++":
                     cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
@@ -57,11 +58,21 @@ class smZ_CLIPTextEncode:
                 if multi_conditioning:
                     c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
                     conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
+
+                    cc, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
+                    pooled = pooled.to(device=devices.device)
                 else:
                     uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
                     cond = prompt_parser.reconstruct_cond_batch(uc, steps)
+
+                    cc, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
+                    pooled = pooled.to(device=devices.device)
                 model_hijack.undo_hijack(clip_clone)
-                return ([[cond.to(device=devices.device), {}]], )
+                # true
+                # print("uncond match?",torch.all(cond.to(device=devices.device) == cc.to(device=devices.device)))
+                # import pdb; pdb.set_trace()
+                # print("cond (+)" if multi_conditioning else "uncond (-)", cond) # debug
+                return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
 
         result = run()
         # print("cond (+)" if multi_conditioning else "uncond (-)", result[0][0][0]) # debug

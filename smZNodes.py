@@ -3,13 +3,13 @@ from comfy.sd import CLIP
 from comfy.sd1_clip import SD1ClipModel
 from typing import List, Tuple
 from types import MethodType
+from functools import partial
 from .modules import prompt_parser
 from .modules import shared, devices
 from .modules.shared import opts
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
-
 
 def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
     '''
@@ -33,13 +33,19 @@ def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False)
     return ret
 
 def encode_token_weights_customized(self: SD1ClipModel, token_weight_pairs):
-    to_encode = list(self.empty_tokens)
+    if type(self) == FrozenCLIPEmbedderWithCustomWordsCustom:
+        to_encode = list(self.wrapped.empty_tokens)
+    else:
+        to_encode = list(self.empty_tokens)
     for x in token_weight_pairs:
         tokens = list(map(lambda a: a[0], x))
         weights = list(map(lambda a: a[1], x))
         to_encode.append(tokens)
 
-    out, pooled = self.encode(to_encode)
+    if type(self) == FrozenCLIPEmbedderWithCustomWordsCustom:
+        out, pooled = self.encode_with_transformers(to_encode, return_pooled=True)
+    else:
+        out, pooled = self.encode(to_encode)
     zw = torch.asarray(weights).to(device=out.device)
 
     z_empty = out[0:1]
@@ -89,7 +95,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
     Custom `FrozenCLIPEmbedderWithCustomWords` class that also inherits
     `SD1Tokenizer` to have the `_try_get_embedding()` method.
 
-    Only supports SD1, not SD2 or SDXL.
+    Supports SD1.x and may not support SD2.x or SDXL.
     '''
     def populate_self_variables(self, from_):
         super_attrs = vars(from_)
@@ -213,7 +219,6 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
                 tokens += tmp
         return tokens
 
-
 class Embedding:
     def __init__(self, vec, name, step=None):
         self.vec = vec
@@ -258,3 +263,87 @@ class Embedding:
 
         self.cached_checksum = f'{const_hash(self.vec.reshape(-1) * 100) & 0xffff:04x}'
         return self.cached_checksum
+
+def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=False):
+    '''
+    The function is our rendition of `clip.encode_from_tokens()`.
+    It still calls `clip.encode_from_tokens()` but hijacks the
+    `clip.cond_stage_model.encode_token_weights()` method
+    so we can run our own version of `encode_token_weights()`
+
+    Originally from `sd.py`: `encode_from_tokens()`
+    '''
+    ret = None
+    clip_clone = clip
+    tokens=texts
+    clip = clip.cond_stage_model.hijack.clip_orig
+    encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
+    try:
+        partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+        clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
+        ret = clip.encode_from_tokens(tokens, return_pooled)
+        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+    except Exception as error:
+        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+        raise error
+
+    return ret
+
+# tokenize then encode
+# from prompt_parser.py: get_learned_conditioning()
+def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsCustom, prompts: List[str], steps = 1, return_pooled=True, multi=False):
+    if multi:
+        res_indexes, prompt_flat_list, _prompt_indexes = prompt_parser.get_multicond_prompt_list(prompts)
+        prompts = prompt_flat_list
+    res = []
+    prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules(prompts, steps)
+    cache = {}
+    for prompt, prompt_schedule in zip(prompts, prompt_schedules):
+        cached = cache.get(prompt, None)
+        if cached is not None:
+            res.append(cached)
+            continue
+        texts = [x[1] for x in prompt_schedule]
+        # forward function
+        # conds = model.get_learned_conditioning(texts)
+        cond, pooled = forward_custom(model, texts)
+
+        # there's only one prompt_schedule since steps = 1, and prompts with special syntax are not processed
+        # with prompt schedules., i.e those <text>:from:to. That's the job of the sampler. So we can return early here.
+        return (cond, pooled) if return_pooled else cond
+
+        # cond_schedule = []
+        # for i, (end_at_step, _text) in enumerate(prompt_schedule):
+        #     cond_schedule.append(ScheduledPromptConditioning(end_at_step, conds[i]))
+        # cache[prompt] = cond_schedule
+        # res.append(cond_schedule)
+        # res += tokens
+    # return res # [res]
+
+
+# This function is from the forward() function of FrozenCLIPEmbedderWithCustomWordsBase
+def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[str], multi=False) -> List[List[Tuple[int, float]]]:
+    batch_chunks, _token_count = self.process_texts(texts)
+    used_embeddings = {}
+    chunk_count = max([len(x) for x in batch_chunks])
+    zs = []
+    all_twp = [] # added by me
+    for i in range(chunk_count):
+        batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
+        tokens = [x.tokens for x in batch_chunk]
+        multipliers = [x.multipliers for x in batch_chunk]
+        self.hijack.fixes = [x.fixes for x in batch_chunk]
+        for fixes in self.hijack.fixes:
+            for _position, embedding in fixes:
+                used_embeddings[embedding.name] = embedding
+        z = self.process_tokens(tokens, multipliers)
+        zs.append(z)
+        all_twp += [list(zip(x.tokens, x.multipliers)) for x in batch_chunk] # added by me
+    if len(used_embeddings) > 0:
+        embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
+        self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
+    # added by me ============================================
+    ret = torch.hstack(zs)
+    # Instead of encoding individual tokens, we get all tokens, then encode all of them at once, like comfy.
+    cond, pooled = encode_token_weights_customized(self, all_twp)
+    return (ret, pooled) # ret has correct applied mean, not cond. But pooled was from all the tokens, which is correct.

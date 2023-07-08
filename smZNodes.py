@@ -219,6 +219,37 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
                 tokens += tmp
         return tokens
 
+    def process_tokens(self, remade_batch_tokens, batch_multipliers):
+        """
+        sends one single prompt chunk to be encoded by transformers neural network.
+        remade_batch_tokens is a batch of tokens - a list, where every element is a list of tokens; usually
+        there are exactly 77 tokens in the list. batch_multipliers is the same but for multipliers instead of tokens.
+        Multipliers are used to give more or less weight to the outputs of transformers network. Each multiplier
+        corresponds to one token.
+        """
+        try:
+            tokens = torch.asarray(remade_batch_tokens).to(devices.device)
+            # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
+            if self.id_end != self.id_pad:
+                for batch_pos in range(len(remade_batch_tokens)):
+                    index = remade_batch_tokens[batch_pos].index(self.id_end)
+                    tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
+        except:
+            # comfy puts embeddings into the tokens list and torch.asarray will give an error, so we do this
+            tokens = remade_batch_tokens
+            pass
+        z = self.encode_with_transformers(tokens)
+        # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
+        batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
+        if opts.prompt_mean_norm:
+            original_mean = z.mean()
+            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            new_mean = z.mean()
+            z = z * (original_mean / new_mean)
+        else:
+            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+        return z
+
 class Embedding:
     def __init__(self, vec, name, step=None):
         self.vec = vec

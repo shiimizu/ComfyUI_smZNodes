@@ -42,7 +42,21 @@ class smZ_CLIPTextEncode:
             if "comfy" in parser:
                 tokens = clip.tokenize(text)
                 if parser == "comfy++":
+
+                    clip_clone = clip.clone()
+                    model_hijack.hijack(clip_clone)
+                    zs = []
+                    # import pdb; pdb.set_trace()
+                    for batch_chunk in tokens:
+                        tokens_ = [x[0] for x in batch_chunk]
+                        multipliers = [x[1] for x in batch_chunk]
+                        z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
+                        zs.append(z)
+                    zst = torch.hstack(zs)
+                    model_hijack.undo_hijack(clip_clone)
+
                     cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
+                    cond=zst
                 else:
                     cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
                 return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )

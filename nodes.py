@@ -1,7 +1,7 @@
 from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
+from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts, add_sample_dpmpp_2m_alt
 from comfy.sd import CLIP
 import torch
 

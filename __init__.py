@@ -65,8 +65,10 @@ else:
     os.makedirs(web_extension_path)
 
 copy_to_web(smZdynamicWidgets_JS_file)
+
 # ==============
 
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS, add_sample_dpmpp_2m_alt
+add_sample_dpmpp_2m_alt()
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

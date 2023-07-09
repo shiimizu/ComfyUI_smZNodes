@@ -307,6 +307,10 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     clip = clip.cond_stage_model.hijack.clip_orig
     encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
     try:
+        from torch import mps
+    except:
+        pass
+    try:
         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
         clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
         ret = clip.encode_from_tokens(tokens, return_pooled)

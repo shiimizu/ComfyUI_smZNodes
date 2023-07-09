@@ -31,7 +31,7 @@ These images can be dragged into ComfyUI to load their workflows. Each image is 
 
 
 Image slider links:
-- https://imgsli.com/MTkwNjEw
+- https://imgsli.com/MTkwNjEz
 - https://imgsli.com/MTkwNjEx
 
 ## Options

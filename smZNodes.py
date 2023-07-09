@@ -150,11 +150,8 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
             raise error
         return ret
 
-
     def tokenize_line(self, line):
-
         self.parse_and_register_embeddings(line) # register embeddings, discard return
-
         return super().tokenize_line(line)
 
     # This function has been added to apply embeddings
@@ -353,7 +350,7 @@ def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsCust
 
 
 # This function is from the forward() function of FrozenCLIPEmbedderWithCustomWordsBase
-def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[str], multi=False) -> List[List[Tuple[int, float]]]:
+def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[str]) -> List[List[Tuple[int, float]]]:
     batch_chunks, _token_count = self.process_texts(texts)
     used_embeddings = {}
     chunk_count = max([len(x) for x in batch_chunks])
@@ -374,7 +371,7 @@ def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[st
         embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
         self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
     # added by me ============================================
-    ret = torch.hstack(zs)
+    ret = torch.hstack(zs).cpu()
     # Instead of encoding individual tokens, we get all tokens, then encode all of them at once, like comfy.
     cond, pooled = encode_token_weights_customized(self, all_twp)
     return (ret, pooled) # ret has correct applied mean, not cond. But pooled was from all the tokens, which is correct.

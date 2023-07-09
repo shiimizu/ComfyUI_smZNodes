@@ -46,7 +46,6 @@ class smZ_CLIPTextEncode:
                     clip_clone = clip.clone()
                     model_hijack.hijack(clip_clone)
                     zs = []
-                    # import pdb; pdb.set_trace()
                     for batch_chunk in tokens:
                         tokens_ = [x[0] for x in batch_chunk]
                         multipliers = [x[1] for x in batch_chunk]
@@ -67,24 +66,19 @@ class smZ_CLIPTextEncode:
                 texts = [text]
                 clip_clone = clip.clone()
                 model_hijack.hijack(clip_clone)
-                steps = 1
+                # steps = 1
                 # from A1111's processing.py and sd_samplers_kdiffusion.py
                 if multi_conditioning:
-                    c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
+                    # c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    # conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
 
-                    cc, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
-                    pooled = pooled.to(device=devices.device)
+                    cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
                 else:
-                    uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    cond = prompt_parser.reconstruct_cond_batch(uc, steps)
+                    # uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    # cond = prompt_parser.reconstruct_cond_batch(uc, steps)
 
-                    cc, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
-                    pooled = pooled.to(device=devices.device)
+                    cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
                 model_hijack.undo_hijack(clip_clone)
-                # true
-                # print("uncond match?",torch.all(cond.to(device=devices.device) == cc.to(device=devices.device)))
-                # import pdb; pdb.set_trace()
                 # print("cond (+)" if multi_conditioning else "uncond (-)", cond) # debug
                 return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
 

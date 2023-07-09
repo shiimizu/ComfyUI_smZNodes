@@ -372,6 +372,12 @@ def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[st
         self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
     # added by me ============================================
     ret = torch.hstack(zs).cpu()
+
     # Instead of encoding individual tokens, we get all tokens, then encode all of them at once, like comfy.
     cond, pooled = encode_token_weights_customized(self, all_twp)
+
+    if opts.use_old_emphasis_implementation:
+        from .modules import sd_hijack_clip_old
+        ret = sd_hijack_clip_old.forward_old(self, texts).cpu()
+
     return (ret, pooled) # ret has correct applied mean, not cond. But pooled was from all the tokens, which is correct.

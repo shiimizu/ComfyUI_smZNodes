@@ -39,4 +39,5 @@ opts.data['comma_padding_backtrack'] = None
 opts.data['prompt_mean_norm'] = True
 opts.data["comma_padding_backtrack"] = 20
 opts.data["clip_skip"] = None
-
+opts.data['enable_emphasis'] = True
+opts.data['use_old_emphasis_implementation'] = False

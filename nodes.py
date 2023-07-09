@@ -15,14 +15,18 @@ class smZ_CLIPTextEncode:
             # whether weights are normalized by taking the mean
             "mean_normalization": ([False, True],{"default": False}),
             "multi_conditioning": ([False, True],{"default": False}),
+            "use_old_emphasis_implementation": ([False, True],{"default": False}),
             },}
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
-    def encode(self, clip: CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool):
-        opts.data['prompt_mean_norm'] = mean_normalization
+    def encode(self, clip: CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool):
         devices.device = clip.patcher.load_device
+        opts.data['prompt_mean_norm'] = mean_normalization
+        opts.data['use_old_emphasis_implementation'] = use_old_emphasis_implementation
+        # not necessary since we use a different transform function
+        opts.data['clip_skip'] = abs(clip.layer_idx or 1)
 
         def run():
             if parser == "full":
@@ -51,18 +55,15 @@ class smZ_CLIPTextEncode:
                         multipliers = [x[1] for x in batch_chunk]
                         z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
                         zs.append(z)
-                    zst = torch.hstack(zs)
+                    zcond = torch.hstack(zs)
                     model_hijack.undo_hijack(clip_clone)
 
                     cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
-                    cond=zst
+                    cond=zcond
                 else:
                     cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
                 return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
             else:
-                # not necessary since we use a different transform function
-                opts.data['clip_skip'] = abs(clip.layer_idx or 1)
-
                 texts = [text]
                 clip_clone = clip.clone()
                 model_hijack.hijack(clip_clone)

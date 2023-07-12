@@ -474,9 +474,9 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
 class KSamplerX0Inpaint_smZ(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
-        self.inner_model = model
-        self.s_min_uncond = 0.0 #getattr(p, 's_min_uncond', 0.0)
-        self.init_latent = None
+        # self.inner_model = model
+        self.inner_model = CFGDenoiser(model)
+        self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
 
     def combine_denoised(self, x_out, conds_list, uncond, cond_scale):
         denoised_uncond = x_out[-uncond.shape[0]:]
@@ -510,8 +510,7 @@ def set_model_k(self):
     else:
         self.model_wrap = comfy.samplers.k_diffusion_external.CompVisDenoiser(self.model_denoise, quantize=True)
     self.model_wrap.parameterization = self.model.parameterization
-    # self.model_k = KSamplerX0Inpaint(self.model_wrap)
-    self.model_k = KSamplerX0Inpaint_smZ(CFGDenoiser(self.model_wrap))
+    self.model_k = KSamplerX0Inpaint_smZ(self.model_wrap)
 
 class SDKSampler(comfy.samplers.KSampler):
     def __init__(self, *args, **kwargs):

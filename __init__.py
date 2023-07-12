@@ -87,5 +87,5 @@ injected_code = """
             except Exception as err:
                 pass
 """
-modified_function = inject_code(KSampler.sample, target_line="self.model_k.noise = noise", code_to_insert=injected_code)
+modified_function = inject_code(KSampler.sample, target_line='extra_args["denoise_mask"] = denoise_mask', code_to_insert=injected_code)
 KSampler.sample = modified_function

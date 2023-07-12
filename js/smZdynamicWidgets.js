@@ -34,8 +34,10 @@ function widgetLogic(node, widget) {
 		}
 		if (widget.value === "comfy") {
 			toggleWidget(node, findWidgetByName(node, 'mean_normalization'))
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
 		} else {
 			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
 		}
 	}
 }
@@ -87,6 +89,17 @@ app.registerExtension({
 							content: "Hide/show use_old_emphasis_implementation",
 							callback: () => {
                                 let widget = findWidgetByName(this, 'use_old_emphasis_implementation')
+                                if (!widget || doesInputWithNameExist(this, widget.name)) return;
+                                if (!origProps[widget.name]) {
+                                    origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
+                                }
+                                toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
+							},
+						},
+						{
+							content: "Hide/show use_CFGDenoiser",
+							callback: () => {
+                                let widget = findWidgetByName(this, 'use_CFGDenoiser')
                                 if (!widget || doesInputWithNameExist(this, widget.name)) return;
                                 if (!origProps[widget.name]) {
                                     origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };

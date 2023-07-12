@@ -1,3 +1,4 @@
+from comfy.model_management import vram_state, VRAMState
 import logging
 
 log = logging.getLogger("sd")
@@ -41,3 +42,11 @@ opts.data["comma_padding_backtrack"] = 20
 opts.data["clip_skip"] = None
 opts.data['enable_emphasis'] = True
 opts.data['use_old_emphasis_implementation'] = False
+opts.data['disable_nan_check'] = True
+opts.data['always_batch_cond_uncond'] = False
+
+opts.data['use_CFGDenoiser'] = False
+opts.data['disable_max_denoise'] = False
+
+# batch_cond_uncond = cmd_opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
+batch_cond_uncond = opts.always_batch_cond_uncond or not (vram_state == VRAMState.LOW_VRAM or vram_state == VRAMState.NORMAL_VRAM)

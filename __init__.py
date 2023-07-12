@@ -81,6 +81,9 @@ injected_code = """
                     from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
                     if smZ_opts.disable_max_denoise:
                         max_denoise = False
+                    if positive[0][1].get('use_CFGDenoiser', None) or negative[0][1].get('use_CFGDenoiser', None):
+                        from ComfyUI_smZNodes.smZNodes import set_model_k
+                        set_model_k(self)
             except Exception as err:
                 pass
 """

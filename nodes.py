@@ -2,8 +2,11 @@ from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
 from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts, add_sample_dpmpp_2m_alt
-from comfy.sd import CLIP
+import comfy.sd
+import comfy.model_management
 import torch
+import comfy.samplers
+import comfy.sample
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -16,12 +19,13 @@ class smZ_CLIPTextEncode:
             "mean_normalization": ([False, True],{"default": False}),
             "multi_conditioning": ([False, True],{"default": False}),
             "use_old_emphasis_implementation": ([False, True],{"default": False}),
+            "use_CFGDenoiser": ([False, True],{"default": False}),
             },}
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
-    def encode(self, clip: CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool):
+    def encode(self, clip: comfy.sd.CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool, use_CFGDenoiser:bool):
         devices.device = clip.patcher.load_device
         opts.data['prompt_mean_norm'] = mean_normalization
         opts.data['use_old_emphasis_implementation'] = use_old_emphasis_implementation
@@ -42,6 +46,15 @@ class smZ_CLIPTextEncode:
             else:
                 opts.data['prompt_attention'] = "Comfy parser"
 
+            if parser != "comfy":
+                opts.data['disable_max_denoise'] = True
+                opts.data['use_CFGDenoiser'] = use_CFGDenoiser
+                if comfy.model_management.get_torch_device() == torch.device("mps"):
+                    try:
+                        from torch import mps
+                    except:
+                        pass
+
             pooled=None
             if "comfy" in parser:
                 tokens = clip.tokenize(text)
@@ -60,28 +73,31 @@ class smZ_CLIPTextEncode:
 
                     cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
                     cond=zcond
+                    pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
                 else:
                     cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
-                return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
+                    pooled = {"pooled_output": pooled}
+                return ([[cond, pooled or {} ]], )
             else:
                 texts = [text]
                 clip_clone = clip.clone()
                 model_hijack.hijack(clip_clone)
-                # steps = 1
+                steps = 1
                 # from A1111's processing.py and sd_samplers_kdiffusion.py
                 if multi_conditioning:
-                    # c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    # conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
+                    c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
 
-                    cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
+                    _cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
                 else:
-                    # uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    # cond = prompt_parser.reconstruct_cond_batch(uc, steps)
+                    uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    cond = prompt_parser.reconstruct_cond_batch(uc, steps)
 
-                    cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
+                    _cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
                 model_hijack.undo_hijack(clip_clone)
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
                 # print("cond (+)" if multi_conditioning else "uncond (-)", cond) # debug
-                return ([[cond, {} if pooled is None else {"pooled_output": pooled} ]], )
+            return ([[cond, pooled or {} ]], )
 
         result = run()
         # print("cond (+)" if multi_conditioning else "uncond (-)", result[0][0][0]) # debug
@@ -92,7 +108,6 @@ class smZ_CLIPTextEncode:
 NODE_CLASS_MAPPINGS = {
     "smZ CLIPTextEncode": smZ_CLIPTextEncode,
 }
-
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     "smZ CLIPTextEncode" : "CLIP Text Encode++",

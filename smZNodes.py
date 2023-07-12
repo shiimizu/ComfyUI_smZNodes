@@ -453,6 +453,96 @@ def inject_code(original_func, target_line, code_to_insert):
 
 # ========================================================================
 
+def txt2img_image_conditioning(sd_model, x, width=None, height=None):
+    return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
+    # if sd_model.model.conditioning_key in {'hybrid', 'concat'}: # Inpainting models
+    #     # The "masked-image" in this case will just be all zeros since the entire image is masked.
+    #     image_conditioning = torch.zeros(x.shape[0], 3, height, width, device=x.device)
+    #     image_conditioning = sd_model.get_first_stage_encoding(sd_model.encode_first_stage(image_conditioning))
+    #     # Add the fake full 1s mask to the first dimension.
+    #     image_conditioning = torch.nn.functional.pad(image_conditioning, (0, 0, 0, 0, 1, 0), value=1.0)
+    #     image_conditioning = image_conditioning.to(x.dtype)
+    #     return image_conditioning
+    # elif sd_model.model.conditioning_key == "crossattn-adm": # UnCLIP models
+    #     return x.new_zeros(x.shape[0], 2*sd_model.noise_augmentor.time_embed.dim, dtype=x.dtype, device=x.device)
+    # else:
+    #     # Dummy zero conditioning if we're not using inpainting or unclip models.
+    #     # Still takes up a bit of memory, but no encoder call.
+    #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
+    #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
+
+class KSamplerX0Inpaint_smZ(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.inner_model = model
+        self.s_min_uncond = 0.0 #getattr(p, 's_min_uncond', 0.0)
+        self.init_latent = None
+
+    def combine_denoised(self, x_out, conds_list, uncond, cond_scale):
+        denoised_uncond = x_out[-uncond.shape[0]:]
+        denoised = torch.clone(denoised_uncond)
+
+        for i, conds in enumerate(conds_list):
+            for cond_index, weight in conds:
+                denoised[i] += (x_out[cond_index] - denoised_uncond[i]) * (weight * cond_scale)
+
+        return denoised
+    # cond_concat, model_option is used in comfy.samplers.sampling_function
+    def forward(self, x, sigma, uncond, cond, cond_scale, denoise_mask, cond_concat=None, model_options={}, seed=None):
+        if denoise_mask is not None:
+            latent_mask = 1. - denoise_mask
+            x = x * denoise_mask + (self.latent_image + self.noise * sigma.reshape([sigma.shape[0]] + [1] * (len(self.noise.shape) - 1))) * latent_mask
+        # out = self.inner_model(x, sigma, cond=cond, uncond=uncond, cond_scale=cond_scale, cond_concat=cond_concat, model_options=model_options, seed=seed)
+        image_cond = txt2img_image_conditioning(self, x)
+        out = self.inner_model(x, sigma, cond=cond[0][0], uncond=uncond[0][0], cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
+
+        if denoise_mask is not None:
+            out *= denoise_mask
+
+        if denoise_mask is not None:
+            out += self.latent_image * latent_mask
+        return out
+
+def set_model_k(self):
+    self.model_denoise = self.model # main change
+    if self.model.parameterization == "v":
+        self.model_wrap = comfy.samplers.CompVisVDenoiser(self.model_denoise, quantize=True)
+    else:
+        self.model_wrap = comfy.samplers.k_diffusion_external.CompVisDenoiser(self.model_denoise, quantize=True)
+    self.model_wrap.parameterization = self.model.parameterization
+    # self.model_k = KSamplerX0Inpaint(self.model_wrap)
+    self.model_k = KSamplerX0Inpaint_smZ(CFGDenoiser(self.model_wrap))
+
+class SDKSampler(comfy.samplers.KSampler):
+    def __init__(self, *args, **kwargs):
+        super(SDKSampler, self).__init__(*args, **kwargs)
+        if opts.use_CFGDenoiser:
+            set_model_k(self)
+
+# Custom KSampler using CFGDenoiser. Unused.
+class smz_SDKSampler(nodes.KSampler):
+    @classmethod
+    def INPUT_TYPES(s):
+        it = super(smz_SDKSampler, s).INPUT_TYPES()
+        if not it.get('hidden'):
+            it['hidden'] = {}
+        it['hidden']['use_CFGDenoiser'] = ([False, True],{"default": True})
+        return it
+    def sample(self, use_CFGDenoiser=True, *args, **kwargs):
+        opts.data['use_CFGDenoiser'] = use_CFGDenoiser
+        backup_KSampler = comfy.samplers.KSampler
+        ret = None
+        try:
+            comfy.samplers.KSampler = SDKSampler
+            ret = super(smz_SDKSampler, self).sample(*args, **kwargs)
+            comfy.samplers.KSampler = backup_KSampler
+        except Exception as err:
+            comfy.samplers.KSampler = backup_KSampler
+            raise err
+        return ret
+
+# ========================================================================
+
 # DPM++ 2M alt
 
 from tqdm.auto import trange

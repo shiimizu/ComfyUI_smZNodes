@@ -14,8 +14,6 @@ def install(module):
         print(f"\033[92m[smZNodes] \033[0;31mFailed to install {module}.\033[0m")
 
 # Reload modules after installation
-# https://stackoverflow.com/a/61019586
-# or https://stackoverflow.com/a/25384923
 PRELOADED_MODULES = set()
 def init() :
     # local imports to keep things neat
@@ -68,7 +66,23 @@ copy_to_web(smZdynamicWidgets_JS_file)
 
 # ==============
 
-from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS, add_sample_dpmpp_2m_alt
+from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+
+# add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
+from .smZNodes import add_sample_dpmpp_2m_alt, inject_code
+
 add_sample_dpmpp_2m_alt()
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+from comfy.samplers import KSampler
+injected_code = """
+            try:
+                if positive[0][1].get('from_smZ', None) or negative[0][1].get('from_smZ', None):
+                    from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
+                    if smZ_opts.disable_max_denoise:
+                        max_denoise = False
+            except Exception as err:
+                pass
+"""
+modified_function = inject_code(KSampler.sample, target_line="self.model_k.noise = noise", code_to_insert=injected_code)
+KSampler.sample = modified_function

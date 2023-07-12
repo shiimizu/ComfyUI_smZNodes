@@ -1,15 +1,25 @@
+import comfy
 import torch
 from comfy.sd import CLIP
 from comfy.sd1_clip import SD1ClipModel
 from typing import List, Tuple
 from types import MethodType
 from functools import partial
-from .modules import prompt_parser
-from .modules import shared, devices
+from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
+from .modules.sd_samplers_kdiffusion import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from types import MethodType
+import nodes
+import inspect
+from textwrap import dedent
+import functools
+import tempfile
+import importlib
+import sys
+
 
 def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
     '''
@@ -307,10 +317,6 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     clip = clip.cond_stage_model.hijack.clip_orig
     encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
     try:
-        from torch import mps
-    except:
-        pass
-    try:
         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
         clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
         ret = clip.encode_from_tokens(tokens, return_pooled)
@@ -385,6 +391,69 @@ def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[st
         ret = sd_hijack_clip_old.forward_old(self, texts).cpu()
 
     return (ret, pooled) # ret has correct applied mean, not cond. But pooled was from all the tokens, which is correct.
+
+# =======================================================================================
+
+def inject_code(original_func, target_line, code_to_insert):
+    # Get the source code of the original function
+    original_source = inspect.getsource(original_func)
+
+    # Split the source code into lines
+    lines = original_source.split("\n")
+
+    # Find the line number of the target line
+    target_line_number = None
+    for i, line in enumerate(lines):
+        if target_line in line:
+            target_line_number = i + 1
+            break
+
+    if target_line_number is None:
+        # Target line not found, return the original function
+        return original_func
+
+    # Insert the code to be injected after the target line
+    lines.insert(target_line_number, code_to_insert)
+
+    # Recreate the modified source code
+    modified_source = "\n".join(lines)
+    modified_source = dedent(modified_source.strip("\n"))
+
+    # Create a temporary file to write the modified source code so I can still view the
+    # source code when debugging.
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.py') as temp_file:
+        temp_file.write(modified_source)
+        temp_file.flush()
+
+        MODULE_PATH = temp_file.name
+        MODULE_NAME = __name__.split('.')[0] + "_patch_modules"
+        spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        # Pass global variables to the modified module
+        globals_dict = original_func.__globals__
+        for key, value in globals_dict.items():
+            setattr(module, key, value)
+        modified_module = module
+
+        # Retrieve the modified function from the module
+        modified_function = getattr(modified_module, original_func.__name__)
+
+    # If the original function was a method, bind it to the first argument (self)
+    if inspect.ismethod(original_func):
+        modified_function = modified_function.__get__(original_func.__self__, original_func.__class__)
+
+    # Update the metadata of the modified function to associate it with the original function
+    functools.update_wrapper(modified_function, original_func)
+
+    # Return the modified function
+    return modified_function
+
+# ========================================================================
+
+# DPM++ 2M alt
 
 from tqdm.auto import trange
 @torch.no_grad()

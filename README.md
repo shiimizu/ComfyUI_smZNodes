@@ -12,7 +12,7 @@ Achieve identical embeddings from [stable-diffusion-webui](https://github.com/AU
 
 This means you can reproduce the same images generated on `stable-diffusion-webui` (and its forks) as on `ComfyUI`.
 
-Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences. The slight variations are due to how `ComfyUI` denoises images. There is an option to use another denoiser.
+Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser.
 
 ## Installation
 Navigate to the **_ComfyUI/custom_nodes_** directory, and run:

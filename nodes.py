@@ -95,6 +95,8 @@ class smZ_CLIPTextEncode:
 
                     _cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
                 model_hijack.undo_hijack(clip_clone)
+                if opts.use_old_emphasis_implementation:
+                    cond = _cond
                 pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
                 # print("cond (+)" if multi_conditioning else "uncond (-)", cond) # debug
             return ([[cond, pooled or {} ]], )

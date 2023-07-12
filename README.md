@@ -66,6 +66,7 @@ Image slider links:
 ## Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion.
 - Use the same seed and sampler settings.
+- Use `--force-fp32`
 - Use non-ancestral samplers.
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.
@@ -75,3 +76,6 @@ Image slider links:
     - In regards to `stable-diffusion-webui`:
       - Mine parses prompts using their parser.
       -  Mine takes the mean exactly as they do. `ComfyUI_ADV_CLIP_emb` probably takes the correct mean but hey, this is for the purpose of reproducible images.
+- Where can I learn more about how ComfyUI interprets weights?
+    - https://comfyanonymous.github.io/ComfyUI_examples/faq/
+    - https://blenderneko.github.io/ComfyUI-docs/Interface/Textprompts/

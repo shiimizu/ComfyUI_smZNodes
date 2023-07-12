@@ -16,8 +16,8 @@ class smZ_CLIPTextEncode:
             "clip": ("CLIP", ),
             "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
             # whether weights are normalized by taking the mean
-            "mean_normalization": ([False, True],{"default": False}),
-            "multi_conditioning": ([False, True],{"default": False}),
+            "mean_normalization": ([False, True],{"default": True}),
+            "multi_conditioning": ([False, True],{"default": True}),
             "use_old_emphasis_implementation": ([False, True],{"default": False}),
             "use_CFGDenoiser": ([False, True],{"default": False}),
             },}

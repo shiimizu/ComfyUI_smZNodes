@@ -69,65 +69,51 @@ app.registerExtension({
 	name: "comfy.smZ.dynamicWidgets",
 	beforeRegisterNodeDef(nodeType, nodeData, app) {
 		if (nodeType.title == "CLIP Text Encode++") {
-			const onNodeCreated = nodeType.prototype.onNodeCreated;
-			nodeType.prototype.onNodeCreated = function () {
-				const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
-				this.getExtraMenuOptions = function(_, options) {
-					options.unshift(
-						{
-							content: "Hide/show multi_conditioning",
-							callback: () => {
-                                let widget = findWidgetByName(this, 'multi_conditioning')
-                                if (!widget || doesInputWithNameExist(this, widget.name)) return;
-                                if (!origProps[widget.name]) {
-                                    origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
-                                }
-                                toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
-							},
-						},
-						{
-							content: "Hide/show use_old_emphasis_implementation",
-							callback: () => {
-                                let widget = findWidgetByName(this, 'use_old_emphasis_implementation')
-                                if (!widget || doesInputWithNameExist(this, widget.name)) return;
-                                if (!origProps[widget.name]) {
-                                    origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
-                                }
-                                toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
-							},
-						},
-						{
-							content: "Hide/show use_CFGDenoiser",
-							callback: () => {
-                                let widget = findWidgetByName(this, 'use_CFGDenoiser')
-                                if (!widget || doesInputWithNameExist(this, widget.name)) return;
-                                if (!origProps[widget.name]) {
-                                    origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
-                                }
-                                toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
-							},
-						},
-					);
-				}
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                let that = this;
+                const r = onNodeCreated ? onNodeCreated.apply(that, arguments) : undefined;
+                // console.log(that.getExtraMenuOptions)
 
-				this.onRemoved = function () {
-					// When removing this node we need to remove the input from the DOM
-					for (let y in this.widgets) {
-						if (this.widgets[y].canvas) {
-							this.widgets[y].canvas.remove();
-						}
-					}
-				};
+                // Save the original options
+                const getBaseMenuOptions = that.getExtraMenuOptions;
+                // Add new options
+                that.getExtraMenuOptions = function(_, options) {
+                    // Call the original function for the default menu options
+                    getBaseMenuOptions.call(this, _, options);
 
-				this.onSelected = function () {
-					this.selected = true
-				}
-				this.onDeselected = function () {
-					this.selected = false
-				}
+                    let create_custom_option = (content, widget_name) => ({
+                        content: content,
+                        callback: () => {
+                            let widget = findWidgetByName(this, widget_name)
+                            if (!widget || doesInputWithNameExist(this, widget.name)) return;
+                            if (!origProps[widget.name]) {
+                                origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
+                            }
+                            toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
+                            this.setDirtyCanvas(true);
+                        },
+                    })
 
-				return r;
-			};
+                    const customOptions = [
+                        {
+                            content: "Hide/show ",
+                            widget_name: "multi_conditioning"
+                        },
+                        {
+                            content: "Hide/show ",
+                            widget_name: "use_old_emphasis_implementation"
+                        },
+                        {
+                            content: "Hide/show ",
+                            widget_name: "use_CFGDenoiser"
+                        },
+                    ].map(x => create_custom_option(x.content + x.widget_name, x.widget_name))
+
+                    options.unshift(...customOptions);
+                }
+                return r;
+              };
 		}
 	},
 

@@ -44,9 +44,17 @@ opts.data['enable_emphasis'] = True
 opts.data['use_old_emphasis_implementation'] = False
 opts.data['disable_nan_check'] = True
 opts.data['always_batch_cond_uncond'] = False
+opts.data['pad_cond_uncond'] = False
+
 
 opts.data['use_CFGDenoiser'] = False
 opts.data['disable_max_denoise'] = False
+
+
+opts.data['sdxl_crop_top'] = 0
+opts.data['sdxl_crop_left'] = 0
+opts.data['sdxl_refiner_low_aesthetic_score'] = 2.5
+opts.data['sdxl_refiner_high_aesthetic_score'] = 6.0
 
 # batch_cond_uncond = cmd_opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
 batch_cond_uncond = opts.always_batch_cond_uncond or not (vram_state == VRAMState.LOW_VRAM or vram_state == VRAMState.NORMAL_VRAM)

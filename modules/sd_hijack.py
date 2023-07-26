@@ -1,4 +1,5 @@
 import torch
+import copy
 from types import MethodType
 from comfy.sd import CLIP
 from . import devices
@@ -53,34 +54,68 @@ class StableDiffusionModelHijack:
     # def __init__(self):
     #     self.embedding_db.add_embedding_dir(opts.embeddings_dir)
 
-    def hijack(self, m):
-        self.clip_orig: CLIP = m.clone()
-        backup_embeds = m.cond_stage_model.transformer.get_input_embeddings()
+    def hijack(self, m:CLIP):
 
+        if "SD1ClipModel" == type(m.cond_stage_model).__name__:
+            self.clip_orig: CLIP = m.clone()
+            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
+            model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
+            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
+            m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
 
-        model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
-        model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
-        model_embeddings.token_embedding.weight = backup_embeds.weight
+            self.cond_stage_model = m.cond_stage_model
 
-        m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
-        self.cond_stage_model = m.cond_stage_model
+            # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
+            # The is no `get_learned_conditioning()` so we add it, but make it
+            # use our `m.cond_stage_model.forward()` which runs `torch.nn.Module`'s `forward()` function
+            # from `FrozenCLIPEmbedderWithCustomWordsBase`
+            m.cond_stage_forward = "forward"
+            m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
 
-        # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
-        # The is no `get_learned_conditioning()` so we add it, but make it
-        # use our `m.cond_stage_model.forward()` which runs `torch.nn.Module`'s `forward()` function
-        # from `FrozenCLIPEmbedderWithCustomWordsBase`
-        m.cond_stage_forward = "forward"
-        m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
+            self.clip = m.cond_stage_model
+        elif "SDXLClipModel" == type(m.cond_stage_model).__name__:
+            self.clip_orig: CLIP = copy.copy(m.clone())
+            model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
+            model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
+            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
+            m.cond_stage_model.clip_g = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model.clip_g, self, "clip_g")
+            m.cond_stage_model.clip_g.clip_layer = m.cond_stage_model.clip_g.wrapped.clip_layer
+            m.cond_stage_model.clip_g.reset_clip_layer = m.cond_stage_model.clip_g.wrapped.reset_clip_layer
 
-        self.clip = m.cond_stage_model
+            model_embeddings = m.cond_stage_model.clip_l.transformer.text_model.embeddings
+            model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
+            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
+            m.cond_stage_model.clip_l = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model.clip_l, self, "clip_l")
+            m.cond_stage_model.clip_l.clip_layer = m.cond_stage_model.clip_l.wrapped.clip_layer
+            m.cond_stage_model.clip_l.reset_clip_layer = m.cond_stage_model.clip_l.wrapped.reset_clip_layer
+
+            self.cond_stage_model = m.cond_stage_model
+            # self.cond_stage_model.clip_g = m.cond_stage_model.clip_g
+            # self.cond_stage_model.clip_l = m.cond_stage_model.clip_l
+
+            m.cond_stage_forward = "forward"
+            m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
+
+            self.clip = m.cond_stage_model
 
         apply_weighted_forward(self.clip)
 
     def undo_hijack(self, m):
-        m.cond_stage_model = m.cond_stage_model.wrapped
-        model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
-        if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-            model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+        if "SDXLClipModel" == type(m.cond_stage_model).__name__:
+            m.cond_stage_model.clip_g = m.cond_stage_model.clip_g.wrapped
+            model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
+            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+
+            m.cond_stage_model.clip_l = m.cond_stage_model.clip_l.wrapped
+            model_embeddings = m.cond_stage_model.clip_l.transformer.text_model.embeddings
+            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+        else:
+            m.cond_stage_model = m.cond_stage_model.wrapped
+            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
+            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
         # undo_optimizations()
         undo_weighted_forward(m)
         self.apply_circular(False)
@@ -161,7 +196,6 @@ class EmbeddingsWithFixes(torch.nn.Module):
         super().__init__()
         self.wrapped = wrapped
         self.embeddings = embeddings
-        self.weight : torch.Tensor= None
 
     def forward(self, input_ids):
         batch_fixes = self.embeddings.fixes
@@ -173,12 +207,17 @@ class EmbeddingsWithFixes(torch.nn.Module):
             return inputs_embeds
 
         vecs = []
-
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
                 emb = devices.cond_cast_unet(embedding.vec)
+                if emb.device != tensor.device:
+                    emb = emb.to(device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
-                tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
+                try:
+                    tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
+                except Exception as err:
+                    print("WARNING: shape mismatch when trying to apply embedding, embedding will be ignored", tensor.shape[0], emb.shape[1])
+                    # raise err
             vecs.append(tensor)
 
         return torch.stack(vecs)

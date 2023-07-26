@@ -3,6 +3,27 @@ from . import devices
 from . import prompt_parser
 from . import shared
 from comfy import model_management
+def catenate_conds(conds):
+    if not isinstance(conds[0], dict):
+        return torch.cat(conds)
+
+    return {key: torch.cat([x[key] for x in conds]) for key in conds[0].keys()}
+
+
+def subscript_cond(cond, a, b):
+    if not isinstance(cond, dict):
+        return cond[a:b]
+
+    return {key: vec[a:b] for key, vec in cond.items()}
+
+
+def pad_cond(tensor, repeats, empty):
+    if not isinstance(tensor, dict):
+        return torch.cat([tensor, empty.repeat((tensor.shape[0], repeats, 1))], axis=1)
+
+    tensor['crossattn'] = pad_cond(tensor['crossattn'], repeats, empty)
+    return tensor
+
 
 # This is a `model` that gets fed into a sampler who then calls it which calls
 # torch's forward function to return a denoise
@@ -22,11 +43,7 @@ class CFGDenoiser(torch.nn.Module):
         self.init_latent = None
         self.step = 0
         self.image_cfg_scale = None
-        self.device = model_management.get_torch_device()
-        self.sigma_to_t = self.inner_model.sigma_to_t
-        self.t_to_sigma = self.inner_model.t_to_sigma
-        self.sigmas = self.inner_model.sigmas
-
+        self.padded_cond_uncond = False
 
     def combine_denoised(self, x_out, conds_list, uncond, cond_scale):
         denoised_uncond = x_out[-uncond.shape[0]:]
@@ -80,13 +97,16 @@ class CFGDenoiser(torch.nn.Module):
         #     make_condition_dict = lambda c_crossattn, c_adm: {"c_crossattn": c_crossattn, "c_adm": c_adm} # pylint: disable=C3001
         # else:
         #     image_uncond = image_cond
-        #     make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn, "c_concat": [c_concat]} # pylint: disable=C3001
+        #     if isinstance(uncond, dict):
+        #         make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": [c_concat]}
+        #     else:
+        #         make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [c_crossattn], "c_concat": [c_concat]}
 
         image_uncond = image_cond
-        # make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn, "c_concat": [c_concat.to(device=self.device)]} # pylint: disable=C3001
-        # make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else c_crossattn.to(device=self.device),  "c_concat": [c_concat.to(device=self.device)]} # pylint: disable=C3001
-        make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else c_crossattn.to(device=self.device)} # pylint: disable=C3001
-
+        if isinstance(uncond, dict):
+            make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None}
+        else:
+            make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_concat": None} # pylint: disable=C3001
 
         if not is_edit_model:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])
@@ -112,13 +132,25 @@ class CFGDenoiser(torch.nn.Module):
             x_in = x_in[:-batch_size]
             sigma_in = sigma_in[:-batch_size]
 
+        # self.padded_cond_uncond = False
+        # if shared.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
+        #     empty = shared.sd_model.cond_stage_model_empty_prompt
+        #     num_repeats = (tensor.shape[1] - uncond.shape[1]) // empty.shape[1]
+
+        #     if num_repeats < 0:
+        #         tensor = pad_cond(tensor, -num_repeats, empty)
+        #         self.padded_cond_uncond = True
+        #     elif num_repeats > 0:
+        #         uncond = pad_cond(uncond, num_repeats, empty)
+        #         self.padded_cond_uncond = True
+
         if tensor.shape[1] == uncond.shape[1] or skip_uncond:
             if is_edit_model:
-                cond_in = torch.cat([tensor, uncond, uncond])
+                cond_in = catenate_conds([tensor, uncond, uncond])
             elif skip_uncond:
                 cond_in = tensor
             else:
-                cond_in = torch.cat([tensor, uncond])
+                cond_in = catenate_conds([tensor, uncond])
 
             if shared.batch_cond_uncond:
                 x_out = self.inner_model(x_in, sigma_in, **make_condition_dict([cond_in], image_cond_in))
@@ -127,7 +159,7 @@ class CFGDenoiser(torch.nn.Module):
                 for batch_offset in range(0, x_out.shape[0], batch_size):
                     a = batch_offset
                     b = a + batch_size
-                    x_out[a:b] = self.inner_model(x_in[a:b], sigma_in[a:b], **make_condition_dict([cond_in[a:b]], image_cond_in[a:b]))
+                    x_out[a:b] = self.inner_model(x_in[a:b], sigma_in[a:b], **make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]))
         else:
             x_out = torch.zeros_like(x_in)
             batch_size = batch_size*2 if shared.batch_cond_uncond else batch_size
@@ -136,7 +168,7 @@ class CFGDenoiser(torch.nn.Module):
                 b = min(a + batch_size, tensor.shape[0])
 
                 if not is_edit_model:
-                    c_crossattn = [tensor[a:b]]
+                    c_crossattn = subscript_cond(tensor, a, b)
                 else:
                     c_crossattn = torch.cat([tensor[a:b]], uncond)
 

@@ -1,7 +1,7 @@
 from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts, add_sample_dpmpp_2m_alt
+from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts, scaled_dot_product_no_mem_attention_forward, sdp_no_mem_attnblock_forward
 import comfy.sd
 import comfy.model_management
 import torch
@@ -20,13 +20,20 @@ class smZ_CLIPTextEncode:
             "multi_conditioning": ([False, True],{"default": True}),
             "use_old_emphasis_implementation": ([False, True],{"default": False}),
             "use_CFGDenoiser": ([False, True],{"default": False}),
-            },}
+            },
+            "hidden": {
+                "with_SDXL": ([False, True],{"default": False}),
+                "text_g": ("STRING", {"multiline": True, "default": "CLIP_G"}),
+                "text_l": ("STRING", {"multiline": True, "default": "CLIP_L"}),
+            }
+            }
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
-    def encode(self, clip: comfy.sd.CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool, use_CFGDenoiser:bool):
+    def encode(self, clip: comfy.sd.CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool, use_CFGDenoiser:bool,with_SDXL=False,text_g="",text_l=""):
         devices.device = clip.patcher.load_device
+        # devices.device = comfy.model_management.get_torch_device()
         opts.data['prompt_mean_norm'] = mean_normalization
         opts.data['use_old_emphasis_implementation'] = use_old_emphasis_implementation
         # not necessary since we use a different transform function
@@ -80,23 +87,31 @@ class smZ_CLIPTextEncode:
                 return ([[cond, pooled or {} ]], )
             else:
                 texts = [text]
+                create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
+                texts = create_prompts(texts)
+                if type(clip.cond_stage_model).__name__ == "SDXLClipModel":
+                    if with_SDXL:
+                        texts = {"g": create_prompts([text_g]), "l": create_prompts([text_l])}
+                    else:
+                        texts = {"g": texts, "l": texts}
+
                 clip_clone = clip.clone()
                 model_hijack.hijack(clip_clone)
                 steps = 1
                 # from A1111's processing.py and sd_samplers_kdiffusion.py
                 if multi_conditioning:
-                    c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
+                    # c = prompt_parser.get_multicond_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    # conds_list, cond = prompt_parser.reconstruct_multicond_batch(c, steps)
 
                     _cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True, multi=True)
                 else:
-                    uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
-                    cond = prompt_parser.reconstruct_cond_batch(uc, steps)
+                    # uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
+                    # cond = prompt_parser.reconstruct_cond_batch(uc, steps)
 
                     _cond, pooled = encode_from_texts(clip_clone, texts, return_pooled=True)
                 model_hijack.undo_hijack(clip_clone)
-                if opts.use_old_emphasis_implementation:
-                    cond = _cond
+                # if opts.use_old_emphasis_implementation:
+                cond = _cond
                 pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
                 # print("cond (+)" if multi_conditioning else "uncond (-)", cond) # debug
             return ([[cond, pooled or {} ]], )

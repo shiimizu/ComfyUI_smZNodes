@@ -1,7 +1,6 @@
 import comfy
 import torch
 from comfy.sd import CLIP
-from comfy.sd1_clip import SD1ClipModel
 from typing import List, Tuple
 from types import MethodType
 from functools import partial
@@ -10,6 +9,7 @@ from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
+from comfy.sdxl_clip import SDXLTokenizer, SDXLClipModel
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from types import MethodType
 import nodes
@@ -100,24 +100,33 @@ def get_learned_conditioning(self, c):
         c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
     return c
 
-class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords, SD1Tokenizer):
+# SDXLTokenizer inherits SD1Tokenizer
+class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords, SDXLTokenizer):
     '''
     Custom `FrozenCLIPEmbedderWithCustomWords` class that also inherits
     `SD1Tokenizer` to have the `_try_get_embedding()` method.
 
-    Supports SD1.x and may not support SD2.x or SDXL.
+    Supports SD1.x and SDXL and may not support SD2.x.
     '''
     def populate_self_variables(self, from_):
         super_attrs = vars(from_)
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-    def __init__(self, wrapped: SD1ClipModel, hijack):
-        self.populate_self_variables(hijack.clip_orig.tokenizer)
-        wrapped.tokenizer_backup = hijack.clip_orig.tokenizer # SD1Tokenizer
-
+    def __init__(self, wrapped: SD1ClipModel, hijack, clip_type=""):
+        self.clip_type = clip_type
         # okay to modiy since CLIP was cloned
-        wrapped.tokenizer = hijack.clip_orig.tokenizer.tokenizer # CLIPTokenizer.from_pretrained(tokenizer_path)
+        if type(hijack.clip_orig.tokenizer) == SDXLTokenizer:
+            self.populate_self_variables(hijack.clip_orig.tokenizer)
+            if clip_type == "clip_g":
+                self.populate_self_variables(hijack.clip_orig.tokenizer.clip_g)
+                wrapped.tokenizer = hijack.clip_orig.tokenizer.clip_g.tokenizer
+            elif clip_type == "clip_l":
+                self.populate_self_variables(hijack.clip_orig.tokenizer.clip_l)
+                wrapped.tokenizer = hijack.clip_orig.tokenizer.clip_l.tokenizer
+        else:
+            self.populate_self_variables(hijack.clip_orig.tokenizer) # SD1Tokenizer
+            wrapped.tokenizer = hijack.clip_orig.tokenizer.tokenizer # CLIPTokenizer.from_pretrained(tokenizer_path)
         # self.embedding_identifier_tokenized = hijack.clip_orig.tokenizer.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
         super().__init__(wrapped, hijack)
 
@@ -133,7 +142,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
         '''
         if type(tokens) == torch.Tensor:
             tokens = tokens.tolist()
-        z, pooled = self.wrapped.encode(tokens)
+        z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
         return (z, pooled) if return_pooled else z
 
     def encode_from_tokens_comfy(self, tokens: List[List[int]], return_pooled=False):
@@ -207,7 +216,18 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
                         print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
                         embed = embed.to(device=devices.device)
-                        self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
+                        if self.clip_type == "clip_g" or self.clip_type == "clip_l":
+                            # backup_tokenize = self.hijack.cond_stage_model.tokenize
+                            if not hasattr(self.hijack.cond_stage_model, "tokenize") or self.hijack.cond_stage_model.tokenize == None:
+                                if self.clip_type == "clip_g":
+                                    self.hijack.cond_stage_model.tokenize = self.hijack.cond_stage_model.clip_g.tokenize
+                                elif self.clip_type == "clip_l":
+                                    self.hijack.cond_stage_model.tokenize = self.hijack.cond_stage_model.clip_l.tokenize
+                            self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
+                            # self.hijack.cond_stage_model.tokenize = backup_tokenize
+                            self.hijack.cond_stage_model.tokenize = None
+                        else:
+                            self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
                         if len(embed.shape) == 1:
                             # tokens.append([(embed, weight)])
                             tmp += [(embed, weight)]
@@ -244,17 +264,16 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
         except:
             # comfy puts embeddings into the tokens list and torch.asarray will give an error, so we do this
             tokens = remade_batch_tokens
-            pass
-        z = self.encode_with_transformers(tokens)
+        z = self.encode_with_transformers(tokens).to(devices.device)
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
         if opts.prompt_mean_norm:
             original_mean = z.mean()
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            z *= batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
             new_mean = z.mean()
-            z = z * (original_mean / new_mean)
+            z *= (original_mean / new_mean)
         else:
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            z *= batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
         return z
 
 class Embedding:
@@ -314,16 +333,51 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     ret = None
     clip_clone = clip
     tokens=texts
-    clip = clip.cond_stage_model.hijack.clip_orig
-    encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
-    try:
-        partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-        clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
-        ret = clip.encode_from_tokens(tokens, return_pooled)
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-    except Exception as error:
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        raise error
+    if type(clip.cond_stage_model) == SDXLClipModel:
+        clip = clip.cond_stage_model.clip_g.hijack.clip_orig # doesn't seem to work
+        # if type(clip.cond_stage_model.clip_g).__name__ == "FrozenCLIPEmbedderWithCustomWordsCustom":
+        #     encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.wrapped.encode_token_weights
+        #     encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.wrapped.encode_token_weights
+        #     try:
+        #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_g)
+        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_l)
+        #         ret = clip.encode_from_tokens(tokens, return_pooled)
+        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = encode_token_weights_backup_clip_g
+        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = encode_token_weights_backup_clip_l
+        #     except Exception as error:
+        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = encode_token_weights_backup_clip_g
+        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = encode_token_weights_backup_clip_l
+        #         raise error     
+        # else:
+        if type(clip.cond_stage_model.clip_g).__name__ == "FrozenCLIPEmbedderWithCustomWordsCustom":
+            encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.wrapped.encode_token_weights
+            encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.wrapped.encode_token_weights
+        else:
+            encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.encode_token_weights
+            encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.encode_token_weights
+        try:
+            partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+            clip.cond_stage_model.clip_g.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_g)
+            clip.cond_stage_model.clip_l.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_l)
+            ret = clip.encode_from_tokens(tokens, return_pooled)
+            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_backup_clip_g
+            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_backup_clip_l
+        except Exception as error:
+            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_backup_clip_g
+            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_backup_clip_l
+            raise error
+    else:
+        clip = clip.cond_stage_model.hijack.clip_orig
+        encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
+        try:
+            partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+            clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
+            ret = clip.encode_from_tokens(tokens, return_pooled)
+            clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+        except Exception as error:
+            clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+            raise error
 
     return ret
 
@@ -477,16 +531,11 @@ class KSamplerX0Inpaint_smZ(torch.nn.Module):
         # self.inner_model = model
         self.inner_model = CFGDenoiser(model)
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
+        self.inner_model.device = comfy.model_management.get_torch_device()
+        self.inner_model.sigma_to_t = model.sigma_to_t
+        self.inner_model.t_to_sigma = model.t_to_sigma
+        self.inner_model.sigmas = model.sigmas
 
-    def combine_denoised(self, x_out, conds_list, uncond, cond_scale):
-        denoised_uncond = x_out[-uncond.shape[0]:]
-        denoised = torch.clone(denoised_uncond)
-
-        for i, conds in enumerate(conds_list):
-            for cond_index, weight in conds:
-                denoised[i] += (x_out[cond_index] - denoised_uncond[i]) * (weight * cond_scale)
-
-        return denoised
     # cond_concat, model_option is used in comfy.samplers.sampling_function
     def forward(self, x, sigma, uncond, cond, cond_scale, denoise_mask, cond_concat=None, model_options={}, seed=None):
         if denoise_mask is not None:

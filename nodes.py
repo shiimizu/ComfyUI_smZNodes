@@ -1,7 +1,7 @@
 from .modules import prompt_parser, devices
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts, scaled_dot_product_no_mem_attention_forward, sdp_no_mem_attnblock_forward
+from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
 import comfy.sd
 import comfy.model_management
 import torch

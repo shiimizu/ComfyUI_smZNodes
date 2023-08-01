@@ -555,7 +555,7 @@ class CFGNoisePredictor(torch.nn.Module):
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
         c_adm = None
         if cond[0][1].get("adm_encoded", None) != None:
-            c_adm = torch.cat([uncond[0][1]['adm_encoded'], cond[0][1]['adm_encoded']])
+            c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
         cond_ = cond[0][1].get('cond_', None)
         ucond_ = uncond[0][1].get('cond_', None)
         co = cond[0][0]

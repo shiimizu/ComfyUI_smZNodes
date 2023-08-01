@@ -28,16 +28,16 @@ function widgetLogic(node, widget) {
 		if (widget.value.includes("comfy")) {
 			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'))
 			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'))
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
 		} else {
 			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'), true)
 			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'), true)
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
 		}
 		if (widget.value === "comfy") {
 			toggleWidget(node, findWidgetByName(node, 'mean_normalization'))
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
 		} else {
 			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
 		}
 	}
 }

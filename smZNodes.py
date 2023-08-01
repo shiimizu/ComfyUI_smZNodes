@@ -7,10 +7,14 @@ from functools import partial
 from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
-from .modules.sd_hijack_clip import FrozenCLIPEmbedderWithCustomWords
+from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords, FrozenCLIPEmbedderWithCustomWordsBase
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
-from comfy.sdxl_clip import SDXLTokenizer, SDXLClipModel
+from comfy.sdxl_clip import SDXLTokenizer, SDXLClipModel, SDXLClipGTokenizer, SDXLClipG
+from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from comfy import model_base, model_management
+from comfy.samplers import KSampler, CompVisVDenoiser, KSamplerX0Inpaint
+from comfy.k_diffusion.external import CompVisDenoiser
 from types import MethodType
 import nodes
 import inspect
@@ -19,73 +23,6 @@ import functools
 import tempfile
 import importlib
 import sys
-
-
-def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
-    '''
-    The function is our rendition of `clip.encode_from_tokens()`.
-    It still calls `clip.encode_from_tokens()` but hijacks the
-    `clip.cond_stage_model.encode_token_weights()` method
-    so we can run our own version of `encode_token_weights()`
-
-    Originally from `sd.py`: `encode_from_tokens()`
-    '''
-    ret = None
-    encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
-    try:
-        clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
-        ret = clip.encode_from_tokens(tokens, return_pooled)
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-    except Exception as error:
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        raise error
-
-    return ret
-
-def encode_token_weights_customized(self: SD1ClipModel, token_weight_pairs):
-    if type(self) == FrozenCLIPEmbedderWithCustomWordsCustom:
-        to_encode = list(self.wrapped.empty_tokens)
-    else:
-        to_encode = list(self.empty_tokens)
-    for x in token_weight_pairs:
-        tokens = list(map(lambda a: a[0], x))
-        weights = list(map(lambda a: a[1], x))
-        to_encode.append(tokens)
-
-    if type(self) == FrozenCLIPEmbedderWithCustomWordsCustom:
-        out, pooled = self.encode_with_transformers(to_encode, return_pooled=True)
-    else:
-        out, pooled = self.encode(to_encode)
-    zw = torch.asarray(weights).to(device=out.device)
-
-    z_empty = out[0:1]
-    if pooled.shape[0] > 1:
-        first_pooled = pooled[1:2]
-    else:
-        first_pooled = pooled[0:1]
-
-    output = []
-    for k in range(1, out.shape[0]):
-        # 3D -> 2D
-        z = out[k:k+1]
-        batch_multipliers = zw[k:k+1]
-        # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
-        if opts.prompt_mean_norm:
-            original_mean = z.mean()
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-            new_mean = z.mean()
-            z = z * (original_mean / new_mean)
-        else:
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-            # for i in range(len(z)):
-            #     for j in range(len(z[i])):
-            #         weight = token_weight_pairs[k - 1][j][1]
-            #         z[i][j] = (z[i][j] - z_empty[0][j]) * weight + z_empty[0][j]
-        output.append(z)
-
-    if (len(output) == 0):
-        return z_empty, first_pooled
-    return torch.cat(output, dim=-2).cpu(), first_pooled.cpu()
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -100,38 +37,32 @@ def get_learned_conditioning(self, c):
         c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
     return c
 
-# SDXLTokenizer inherits SD1Tokenizer
-class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords, SDXLTokenizer):
-    '''
-    Custom `FrozenCLIPEmbedderWithCustomWords` class that also inherits
-    `SD1Tokenizer` to have the `_try_get_embedding()` method.
-
-    Supports SD1.x and SDXL and may not support SD2.x.
-    '''
+# Open Clip
+class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, SDXLClipGTokenizer):
     def populate_self_variables(self, from_):
         super_attrs = vars(from_)
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-    def __init__(self, wrapped: SD1ClipModel, hijack, clip_type=""):
-        self.clip_type = clip_type
-        # okay to modiy since CLIP was cloned
-        if type(hijack.clip_orig.tokenizer) == SDXLTokenizer:
-            self.populate_self_variables(hijack.clip_orig.tokenizer)
-            if clip_type == "clip_g":
-                self.populate_self_variables(hijack.clip_orig.tokenizer.clip_g)
-                wrapped.tokenizer = hijack.clip_orig.tokenizer.clip_g.tokenizer
-            elif clip_type == "clip_l":
-                self.populate_self_variables(hijack.clip_orig.tokenizer.clip_l)
-                wrapped.tokenizer = hijack.clip_orig.tokenizer.clip_l.tokenizer
-        else:
-            self.populate_self_variables(hijack.clip_orig.tokenizer) # SD1Tokenizer
-            wrapped.tokenizer = hijack.clip_orig.tokenizer.tokenizer # CLIPTokenizer.from_pretrained(tokenizer_path)
-        # self.embedding_identifier_tokenized = hijack.clip_orig.tokenizer.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
+    def __init__(self, wrapped: SDXLClipG, hijack):
+        self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
+        self.id_start = self.wrapped.tokenizer.bos_token_id
+        self.id_end = self.wrapped.tokenizer.eos_token_id
+        self.id_pad = 0
+
+    def tokenize_line(self, line):
+        parse_and_register_embeddings(self, line)
+        return super().tokenize_line(line)
+
+    def encode(self, tokens):
+        return self.encode_with_transformers(tokens, True)
 
     def encode_with_transformers(self, tokens, return_pooled=False):
-        return self.encode_from_tokens_comfy(tokens, return_pooled)
+        return self.encode_with_transformers_comfy(tokens, return_pooled)
+
+    def encode_token_weights(self, tokens):
+        pass
 
     def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
@@ -140,141 +71,160 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderWithCustomWords,
 
         Originally from `sd1_clip.py`: `encode()` -> `forward()`
         '''
-        if type(tokens) == torch.Tensor:
+        if isinstance(tokens, torch.Tensor):
             tokens = tokens.tolist()
-        z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
+        z, pooled = self.wrapped(tokens)
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
         return (z, pooled) if return_pooled else z
 
-    def encode_from_tokens_comfy(self, tokens: List[List[int]], return_pooled=False):
-        '''
-        The function is our rendition of `clip.encode_from_tokens()`.
-        It still calls `clip.encode_from_tokens()` but hijacks the
-        `clip.cond_stage_model.encode_token_weights()` method
-        so we can run our own version of `encode_token_weights()`
+    def tokenize(self, texts):
+        assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
+        tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
+        return tokenized
 
-        Originally from `sd.py`: `encode_from_tokens()`
+
+class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, SD1Tokenizer):
+    '''
+    Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
+    '''
+    def populate_self_variables(self, from_):
+        super_attrs = vars(from_)
+        self_attrs = vars(self)
+        self_attrs.update(super_attrs)
+
+    def __init__(self, wrapped: SD1ClipModel, hijack):
+        # okay to modiy since CLIP was cloned
+        self.populate_self_variables(wrapped.tokenizer_parent) # SD1Tokenizer
+        # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
+        super().__init__(wrapped, hijack)
+
+    def encode(self, tokens):
+        return self.encode_with_transformers(tokens, True)
+
+    def encode_with_transformers(self, tokens, return_pooled=False):
+        return self.encode_with_transformers_comfy(tokens, return_pooled)
+
+    def encode_token_weights(self, tokens):
+        pass
+
+    def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
-        # note:
-        # self.wrapped = self.hijack.clip_orig.cond_stage_model
-        ret = None
-        if type(tokens) == torch.Tensor:
+        This function is different from `clip.cond_stage_model.encode_token_weights()`
+        in that the tokens are `List[List[int]]`, not including the weights.
+
+        Originally from `sd1_clip.py`: `encode()` -> `forward()`
+        '''
+        # tokens_bak = tokens
+        if isinstance(tokens, torch.Tensor):
             tokens = tokens.tolist()
-        encode_token_weights_backup = self.hijack.clip_orig.cond_stage_model.encode_token_weights
-        try:
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = MethodType(self.encode_with_transformers_comfy, tokens)
-            ret = self.hijack.clip_orig.encode_from_tokens(tokens, return_pooled)
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        except Exception as error:
-            self.hijack.clip_orig.cond_stage_model.encode_token_weights = encode_token_weights_backup
-            raise error
-        return ret
+        z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
+        # z = self.encode_with_transformers__(tokens_bak)
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
+        return (z, pooled) if return_pooled else z
+
+    def encode_with_transformers__(self, tokens):
+        outputs = self.wrapped.transformer(input_ids=tokens, output_hidden_states=self.wrapped.layer == "hidden")
+
+        if self.wrapped.layer == "last":
+            z = outputs.last_hidden_state
+        elif self.wrapped.layer == "pooled":
+            z = outputs.pooler_output[:, None, :]
+        else:
+            z = outputs.hidden_states[self.wrapped.layer_idx]
+            if self.wrapped.layer_norm_hidden_state:
+                z = self.wrapped.transformer.text_model.final_layer_norm(z)
+
+        pooled_output = outputs.pooler_output
+        if self.wrapped.text_projection is not None:
+            pooled_output = pooled_output.to(self.wrapped.text_projection.device) @ self.wrapped.text_projection
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # z=z.float()
+        # z.pooled = pooled_output.float()
+        z.pooled = pooled_output
+        return z
 
     def tokenize_line(self, line):
-        self.parse_and_register_embeddings(line) # register embeddings, discard return
+        parse_and_register_embeddings(self, line) # register embeddings, discard return
         return super().tokenize_line(line)
 
-    # This function has been added to apply embeddings
-    # from sd1_clip.py @ tokenize_with_weights()
-    def parse_and_register_embeddings(self, text: str, return_word_ids=False):
-        '''
-        Takes a prompt and converts it to a list of (token, weight, word id) elements.
-        Tokens can both be integer tokens and pre computed CLIP tensors.
-        Word id values are unique per word and embedding, where the id 0 is reserved for non word tokens.
-        Returned list has the dimensions NxM where M is the input size of CLIP
-        '''
-        if self.pad_with_end:
-            pad_token = self.end_token
-        else:
-            pad_token = 0
+    def tokenize(self, texts):
+        tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
+        return tokenized
 
-        text = escape_important(text)
-        # parsed_weights = token_weights(text, 1.0)
-        parsed = prompt_parser.parse_prompt_attention(text)
-        parsed_weights = [tuple(tw) for tw in parsed]
+# This function has been added to apply embeddings
+# from sd1_clip.py @ tokenize_with_weights()
+def parse_and_register_embeddings(self, text: str, return_word_ids=False):
+    '''
+    Takes a prompt and converts it to a list of (token, weight, word id) elements.
+    Tokens can both be integer tokens and pre computed CLIP tensors.
+    Word id values are unique per word and embedding, where the id 0 is reserved for non word tokens.
+    Returned list has the dimensions NxM where M is the input size of CLIP
+    '''
+    if self.pad_with_end:
+        pad_token = self.end_token
+    else:
+        pad_token = 0
 
-        #tokenize words
-        tokens = []
-        for weighted_segment, weight in parsed_weights:
-            to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
-            to_tokenize = [x for x in to_tokenize if x != ""]
-            # to_tokenize = [x for x in weighted_segment if x != ""]
+    text = escape_important(text)
+    # parsed_weights = token_weights(text, 1.0)
+    parsed = prompt_parser.parse_prompt_attention(text)
+    parsed_weights = [tuple(tw) for tw in parsed]
 
-            tmp=[]
-            # print(word)
-            for word in to_tokenize:
-                #if we find an embedding, deal with the embedding
-                emb_idx = word.find(self.embedding_identifier)
-                # word.startswith(self.embedding_identifier)
-                if emb_idx != -1 and self.embedding_directory is not None:
-                    embedding_name = word[len(self.embedding_identifier):].strip('\n')
+    #tokenize words
+    tokens = []
+    for weighted_segment, weight in parsed_weights:
+        to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
+        to_tokenize = [x for x in to_tokenize if x != ""]
+        # to_tokenize = [x for x in weighted_segment if x != ""]
 
-                    embedding_name_verbose = word[emb_idx:].strip('\n')
-                    embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
-                    embed, leftover = self._try_get_embedding(embedding_name.strip())
+        tmp=[]
+        # print(word)
+        for word in to_tokenize:
+            #if we find an embedding, deal with the embedding
+            emb_idx = word.find(self.embedding_identifier)
+            # word.startswith(self.embedding_identifier)
+            if emb_idx != -1 and self.embedding_directory is not None:
+                embedding_name = word[len(self.embedding_identifier):].strip('\n')
 
-                    if embed is None:
-                        print(f"warning, embedding:{embedding_name} does not exist, ignoring")
+                embedding_name_verbose = word[emb_idx:].strip('\n')
+                embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
+                embed, leftover = self._try_get_embedding(embedding_name.strip())
+
+                if embed is None:
+                    print(f"warning, embedding:{embedding_name} does not exist, ignoring")
+                else:
+                    embed = embed.to(device=devices.device)
+                    self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
+                    if len(embed.shape) == 1:
+                        # tokens.append([(embed, weight)])
+                        tmp += [(embed, weight)]
                     else:
-                        embed = embed.to(device=devices.device)
-                        if self.clip_type == "clip_g" or self.clip_type == "clip_l":
-                            # backup_tokenize = self.hijack.cond_stage_model.tokenize
-                            if not hasattr(self.hijack.cond_stage_model, "tokenize") or self.hijack.cond_stage_model.tokenize == None:
-                                if self.clip_type == "clip_g":
-                                    self.hijack.cond_stage_model.tokenize = self.hijack.cond_stage_model.clip_g.tokenize
-                                elif self.clip_type == "clip_l":
-                                    self.hijack.cond_stage_model.tokenize = self.hijack.cond_stage_model.clip_l.tokenize
-                            self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
-                            # self.hijack.cond_stage_model.tokenize = backup_tokenize
-                            self.hijack.cond_stage_model.tokenize = None
-                        else:
-                            self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
-                        if len(embed.shape) == 1:
-                            # tokens.append([(embed, weight)])
-                            tmp += [(embed, weight)]
-                        else:
-                            # tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
-                            tmp += [(embed[x], weight) for x in range(embed.shape[0])]
-                    #if we accidentally have leftover text, continue parsing using leftover, else move on to next word
-                    if leftover != "":
-                        word = leftover
-                    else:
-                        continue
-                #parse word
-                # tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][1:-1]])
-                tmp += [(word, weight)]
-                # tokens.append(tmp)
-                tokens += tmp
-        return tokens
-
-    def process_tokens(self, remade_batch_tokens, batch_multipliers):
-        """
-        sends one single prompt chunk to be encoded by transformers neural network.
-        remade_batch_tokens is a batch of tokens - a list, where every element is a list of tokens; usually
-        there are exactly 77 tokens in the list. batch_multipliers is the same but for multipliers instead of tokens.
-        Multipliers are used to give more or less weight to the outputs of transformers network. Each multiplier
-        corresponds to one token.
-        """
-        try:
-            tokens = torch.asarray(remade_batch_tokens).to(devices.device)
-            # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
-            if self.id_end != self.id_pad:
-                for batch_pos in range(len(remade_batch_tokens)):
-                    index = remade_batch_tokens[batch_pos].index(self.id_end)
-                    tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
-        except:
-            # comfy puts embeddings into the tokens list and torch.asarray will give an error, so we do this
-            tokens = remade_batch_tokens
-        z = self.encode_with_transformers(tokens).to(devices.device)
-        # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
-        batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
-        if opts.prompt_mean_norm:
-            original_mean = z.mean()
-            z *= batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-            new_mean = z.mean()
-            z *= (original_mean / new_mean)
-        else:
-            z *= batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-        return z
+                        # tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
+                        tmp += [(embed[x], weight) for x in range(embed.shape[0])]
+                #if we accidentally have leftover text, continue parsing using leftover, else move on to next word
+                if leftover != "":
+                    word = leftover
+                else:
+                    continue
+            #parse word
+            # tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][1:-1]])
+            tmp += [(word, weight)]
+            # tokens.append(tmp)
+            tokens += tmp
+    return tokens
 
 class Embedding:
     def __init__(self, vec, name, step=None):
@@ -330,121 +280,190 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
 
     Originally from `sd.py`: `encode_from_tokens()`
     '''
-    ret = None
-    clip_clone = clip
     tokens=texts
-    if type(clip.cond_stage_model) == SDXLClipModel:
-        clip = clip.cond_stage_model.clip_g.hijack.clip_orig # doesn't seem to work
-        # if type(clip.cond_stage_model.clip_g).__name__ == "FrozenCLIPEmbedderWithCustomWordsCustom":
-        #     encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.wrapped.encode_token_weights
-        #     encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.wrapped.encode_token_weights
-        #     try:
-        #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_g)
-        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_l)
-        #         ret = clip.encode_from_tokens(tokens, return_pooled)
-        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = encode_token_weights_backup_clip_g
-        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = encode_token_weights_backup_clip_l
-        #     except Exception as error:
-        #         clip.cond_stage_model.clip_g.wrapped.encode_token_weights = encode_token_weights_backup_clip_g
-        #         clip.cond_stage_model.clip_l.wrapped.encode_token_weights = encode_token_weights_backup_clip_l
-        #         raise error     
-        # else:
-        if type(clip.cond_stage_model.clip_g).__name__ == "FrozenCLIPEmbedderWithCustomWordsCustom":
-            encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.wrapped.encode_token_weights
-            encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.wrapped.encode_token_weights
-        else:
-            encode_token_weights_backup_clip_g = clip.cond_stage_model.clip_g.encode_token_weights
-            encode_token_weights_backup_clip_l = clip.cond_stage_model.clip_l.encode_token_weights
-        try:
-            partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-            clip.cond_stage_model.clip_g.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_g)
-            clip.cond_stage_model.clip_l.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model.clip_l)
-            ret = clip.encode_from_tokens(tokens, return_pooled)
-            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_backup_clip_g
-            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_backup_clip_l
-        except Exception as error:
-            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_backup_clip_g
-            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_backup_clip_l
-            raise error
-    else:
-        clip = clip.cond_stage_model.hijack.clip_orig
-        encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
-        try:
-            partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-            clip.cond_stage_model.encode_token_weights = MethodType(partial_method, clip_clone.cond_stage_model)
-            ret = clip.encode_from_tokens(tokens, return_pooled)
-            clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        except Exception as error:
-            clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-            raise error
+    partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+
+    def assign_funcs(mc):
+        mc.encode_token_weights_orig = mc.encode_token_weights
+        mc.encode_token_weights = MethodType(partial_method, mc)
+    def restore_funcs(mc):
+        if hasattr(mc, "encode_token_weights_orig"):
+            mc.encode_token_weights_orig = mc.encode_token_weights
+
+    class Context:
+        def __init__(self):
+            if type(clip.cond_stage_model) == SDXLClipModel:
+                assign_funcs(clip.cond_stage_model.clip_l)
+                assign_funcs(clip.cond_stage_model.clip_g)
+            else:
+                assign_funcs(clip.cond_stage_model)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args, **kwargs):
+            if type(clip.cond_stage_model) == SDXLClipModel:
+                restore_funcs(clip.cond_stage_model.clip_l)
+                restore_funcs(clip.cond_stage_model.clip_g)
+            else:
+                restore_funcs(clip.cond_stage_model)
+
+    with Context():
+        return clip.encode_from_tokens(tokens, return_pooled)
+
+
+    # ret = None
+    # clip_clone = clip
+    # if type(clip.cond_stage_model) == SDXLClipModel:
+    #     mc.wrapped.clip_l.encode_token_weights_orig = mc.wrapped.clip_l.encode_token_weights
+    #     mc.wrapped.clip_g.encode_token_weights_orig = mc.wrapped.clip_g.encode_token_weights
+    #     try:
+    #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+    #         mc.wrapped.clip_l.encode_token_weights = MethodType(partial_method, mc.clip_l)
+    #         mc.wrapped.clip_g.encode_token_weights = MethodType(partial_method, mc.clip_g)
+    #         ret = clip.encode_from_tokens(tokens, return_pooled)
+    #         mc.wrapped.clip_l.encode_token_weights = mc.wrapped.clip_l.encode_token_weights_orig
+    #         mc.wrapped.clip_g.encode_token_weights = mc.wrapped.clip_g.encode_token_weights_orig
+    #     except Exception as error:
+    #         mc.wrapped.clip_l.encode_token_weights = mc.wrapped.clip_l.encode_token_weights_orig
+    #         mc.wrapped.clip_g.encode_token_weights = mc.wrapped.clip_g.encode_token_weights_orig
+    #         raise error
+    # else:
+    #     mc.wrapped.encode_token_weights_orig = mc.wrapped.encode_token_weights
+    #     try:
+    #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+    #         mc.encode_token_weights = MethodType(partial_method, mc)
+    #         ret = clip.encode_from_tokens(tokens, return_pooled)
+    #         mc.wrapped.encode_token_weights = mc.wrapped.encode_token_weights_orig
+    #     except Exception as error:
+    #         mc.wrapped.encode_token_weights = mc.wrapped.encode_token_weights_orig
+    #         raise error
+
+    # return ret
+
+def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
+    '''
+    The function is our rendition of `clip.encode_from_tokens()`.
+    It still calls `clip.encode_from_tokens()` but hijacks the
+    `clip.cond_stage_model.encode_token_weights()` method
+    so we can run our own version of `encode_token_weights()`
+
+    Originally from `sd.py`: `encode_from_tokens()`
+    '''
+    ret = None
+    encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
+    try:
+        clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
+        ret = clip.encode_from_tokens(tokens, return_pooled)
+        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+    except Exception as error:
+        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
+        raise error
 
     return ret
 
+def encode_token_weights_customized(self: SD1ClipModel|FrozenCLIPEmbedderWithCustomWordsBase, token_weight_pairs):
+    if isinstance(self, SD1ClipModel):
+        to_encode = list(self.empty_tokens)
+    else:
+        to_encode = list(self.wrapped.empty_tokens)
+    for x in token_weight_pairs:
+        tokens = list(map(lambda a: a[0], x))
+        weights = list(map(lambda a: a[1], x))
+        to_encode.append(tokens)
+
+    out, pooled = self.encode(to_encode)
+    zw = torch.asarray(weights).to(device=out.device)
+
+    z_empty = out[0:1]
+    if pooled.shape[0] > 1:
+        first_pooled = pooled[1:2]
+    else:
+        first_pooled = pooled[0:1]
+
+    output = []
+    for k in range(1, out.shape[0]):
+        # 3D -> 2D
+        z = out[k:k+1]
+        batch_multipliers = zw[k:k+1]
+        # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
+        if opts.prompt_mean_norm:
+            original_mean = z.mean()
+            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            new_mean = z.mean()
+            z = z * (original_mean / new_mean)
+        else:
+            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            # for i in range(len(z)):
+            #     for j in range(len(z[i])):
+            #         weight = token_weight_pairs[k - 1][j][1]
+            #         z[i][j] = (z[i][j] - z_empty[0][j]) * weight + z_empty[0][j]
+        output.append(z)
+
+    if (len(output) == 0):
+        return z_empty, first_pooled
+    return torch.cat(output, dim=-2).cpu(), first_pooled.cpu()
+
+
 # tokenize then encode
 # from prompt_parser.py: get_learned_conditioning()
-def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsCustom, prompts: List[str], steps = 1, return_pooled=True, multi=False):
+def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase, prompts: List[str], steps = 1, return_pooled=True, multi=False):
+    first_pooled = None
+    final_cond = None
+    # rewrite the functions here just to extract pooled
+
     if multi:
         res_indexes, prompt_flat_list, _prompt_indexes = prompt_parser.get_multicond_prompt_list(prompts)
         prompts = prompt_flat_list
+        # learned_conditioning = prompt_parser.get_learned_conditioning(model, prompt_flat_list, steps)
+    # The code below is from prompt_parser.get_learned_conditioning
     res = []
     prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules(prompts, steps)
     cache = {}
     for prompt, prompt_schedule in zip(prompts, prompt_schedules):
+        # debug(f'Prompt schedule: {prompt_schedule}')
         cached = cache.get(prompt, None)
         if cached is not None:
             res.append(cached)
             continue
-        texts = [x[1] for x in prompt_schedule]
-        # forward function
+        texts = prompt_parser.SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
         # conds = model.get_learned_conditioning(texts)
-        cond, pooled = forward_custom(model, texts)
+        conds = model.forward(texts)
+        if first_pooled == None:
+            # first_pooled = conds.pooled
+            if conds.pooled.shape[0] > 1:
+                first_pooled = conds.pooled[1:2]
+            else:
+                first_pooled = conds.pooled[0:1]
+        cond_schedule = []
+        for i, (end_at_step, _) in enumerate(prompt_schedule):
+            if isinstance(conds, dict):
+                cond = {k: v[i] for k, v in conds.items()}
+            else:
+                cond = conds[i]
 
-        # there's only one prompt_schedule since steps = 1, and prompts with special syntax are not processed
-        # with prompt schedules., i.e those <text>:from:to. That's the job of the sampler. So we can return early here.
-        return (cond, pooled) if return_pooled else cond
+            cond_schedule.append(prompt_parser.ScheduledPromptConditioning(end_at_step, cond))
 
-        # cond_schedule = []
-        # for i, (end_at_step, _text) in enumerate(prompt_schedule):
-        #     cond_schedule.append(ScheduledPromptConditioning(end_at_step, conds[i]))
-        # cache[prompt] = cond_schedule
-        # res.append(cond_schedule)
-        # res += tokens
-    # return res # [res]
+        cache[prompt] = cond_schedule
+        res.append(cond_schedule)
+    # first_pooled = first_pooled.cpu()
+    if multi:
+        res_mc = []
+        learned_conditioning = res
+        for indexes in res_indexes:
+            res_mc.append([prompt_parser.ComposableScheduledPromptConditioning(learned_conditioning[i], weight) for i, weight in indexes])
+        ret = prompt_parser.MulticondLearnedConditioning(shape=(len(prompts),), batch=res_mc)
+        conds_list, final_cond = prompt_parser.reconstruct_multicond_batch(ret, steps)
+        # final_cond = final_cond.cpu()
+        final_cond.cond = ret
+        first_pooled.cond = ret # for sdxl
+    else:
+        final_cond = prompt_parser.reconstruct_cond_batch(res, steps)
+        # final_cond = final_cond.cpu()
+        final_cond.cond = res
+        first_pooled.cond = res # for sdxl
 
-
-# This function is from the forward() function of FrozenCLIPEmbedderWithCustomWordsBase
-def forward_custom(self: FrozenCLIPEmbedderWithCustomWordsCustom, texts: List[str]) -> List[List[Tuple[int, float]]]:
-    batch_chunks, _token_count = self.process_texts(texts)
-    used_embeddings = {}
-    chunk_count = max([len(x) for x in batch_chunks])
-    zs = []
-    all_twp = [] # added by me
-    for i in range(chunk_count):
-        batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
-        tokens = [x.tokens for x in batch_chunk]
-        multipliers = [x.multipliers for x in batch_chunk]
-        self.hijack.fixes = [x.fixes for x in batch_chunk]
-        for fixes in self.hijack.fixes:
-            for _position, embedding in fixes:
-                used_embeddings[embedding.name] = embedding
-        z = self.process_tokens(tokens, multipliers)
-        zs.append(z)
-        all_twp += [list(zip(x.tokens, x.multipliers)) for x in batch_chunk] # added by me
-    if len(used_embeddings) > 0:
-        embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
-        self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
-    # added by me ============================================
-    ret = torch.hstack(zs).cpu()
-
-    # Instead of encoding individual tokens, we get all tokens, then encode all of them at once, like comfy.
-    cond, pooled = encode_token_weights_customized(self, all_twp)
-
-    if opts.use_old_emphasis_implementation:
-        from .modules import sd_hijack_clip_old
-        ret = sd_hijack_clip_old.forward_old(self, texts).cpu()
-
-    return (ret, pooled) # ret has correct applied mean, not cond. But pooled was from all the tokens, which is correct.
+    return (final_cond, first_pooled) if return_pooled else final_cond
 
 # =======================================================================================
 
@@ -525,41 +544,37 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
     #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
 
-class KSamplerX0Inpaint_smZ(torch.nn.Module):
+class CFGNoisePredictor(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
-        # self.inner_model = model
-        self.inner_model = CFGDenoiser(model)
+        self.inner_model = CFGDenoiser(model.apply_model)
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
         self.inner_model.device = comfy.model_management.get_torch_device()
-        self.inner_model.sigma_to_t = model.sigma_to_t
-        self.inner_model.t_to_sigma = model.t_to_sigma
-        self.inner_model.sigmas = model.sigmas
+        self.alphas_cumprod = model.alphas_cumprod
 
-    # cond_concat, model_option is used in comfy.samplers.sampling_function
-    def forward(self, x, sigma, uncond, cond, cond_scale, denoise_mask, cond_concat=None, model_options={}, seed=None):
-        if denoise_mask is not None:
-            latent_mask = 1. - denoise_mask
-            x = x * denoise_mask + (self.latent_image + self.noise * sigma.reshape([sigma.shape[0]] + [1] * (len(self.noise.shape) - 1))) * latent_mask
-        # out = self.inner_model(x, sigma, cond=cond, uncond=uncond, cond_scale=cond_scale, cond_concat=cond_concat, model_options=model_options, seed=seed)
-        image_cond = txt2img_image_conditioning(self, x)
-        out = self.inner_model(x, sigma, cond=cond[0][0], uncond=uncond[0][0], cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
-
-        if denoise_mask is not None:
-            out *= denoise_mask
-
-        if denoise_mask is not None:
-            out += self.latent_image * latent_mask
+    def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
+        cond[0][0].cond = cond[0][1].get('cond_', None)
+        uncond[0][0].cond = uncond[0][1].get('cond_', None)
+        image_cond = txt2img_image_conditioning(None, x)
+        c_adm = None
+        try:
+            if cond[0][1].get("adm_encoded", None) != None:
+                c_adm = torch.cat([uncond[0][1]['adm_encoded'], cond[0][1]['adm_encoded']]).to(device=self.inner_model.device)
+        except:
+            pass
+        out = self.inner_model(x, timestep, cond=cond[0][0], uncond=uncond[0][0], cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond, c_adm=c_adm)
         return out
 
-def set_model_k(self):
-    self.model_denoise = self.model # main change
-    if self.model.parameterization == "v":
-        self.model_wrap = comfy.samplers.CompVisVDenoiser(self.model_denoise, quantize=True)
+def set_model_k(self: KSampler):
+    self.model_denoise = CFGNoisePredictor(self.model) # main change
+    if ((getattr(self.model, "parameterization", "") == "v") or
+        (getattr(self.model, "model_type", -1) == model_base.ModelType.V_PREDICTION)):
+        self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)
+        self.model_wrap.parameterization = getattr(self.model, "parameterization", "v")
     else:
-        self.model_wrap = comfy.samplers.k_diffusion_external.CompVisDenoiser(self.model_denoise, quantize=True)
-    self.model_wrap.parameterization = self.model.parameterization
-    self.model_k = KSamplerX0Inpaint_smZ(self.model_wrap)
+        self.model_wrap = CompVisDenoiser(self.model_denoise, quantize=True)
+        self.model_wrap.parameterization = getattr(self.model, "parameterization", "eps")
+    self.model_k = KSamplerX0Inpaint(self.model_wrap)
 
 class SDKSampler(comfy.samplers.KSampler):
     def __init__(self, *args, **kwargs):

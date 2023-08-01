@@ -61,11 +61,7 @@ class CFGDenoiser(torch.nn.Module):
 
         return denoised
 
-    # def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-    #     out = self(x, timestep, uncond, cond, cond_scale, cond_concat, model_options=model_options, seed=seed)
-    #     return out
-
-    def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond):
+    def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond, c_adm=None):
         model_management.throw_exception_if_processing_interrupted()
         # if state.interrupted or state.skipped:
         #     raise sd_samplers_common.InterruptedException
@@ -82,11 +78,17 @@ class CFGDenoiser(torch.nn.Module):
         # is_edit_model = (shared.sd_model is not None) and hasattr(shared.sd_model, 'cond_stage_key') and (shared.sd_model.cond_stage_key == "edit") and (self.image_cfg_scale is not None) and (self.image_cfg_scale != 1.0)
         is_edit_model = False
 
-        # conds_list, tensor = prompt_parser.reconstruct_multicond_batch(cond, self.step)
-        # uncond = prompt_parser.reconstruct_cond_batch(uncond, self.step)
-        tensor = cond
         conds_list=[[(0, 1.0)]]
-
+        tensor = cond
+        # if ccc:=getattr(cond, "cond", None):
+        #     conds_list, tensor = prompt_parser.reconstruct_multicond_batch(ccc, self.step)
+        # else:
+        #     print("[smZNodes] WARNING: cond has no attribute `cond`")
+        #     tensor = cond
+        # if uccc:=getattr(uncond, "cond", None):
+        #     uncond = prompt_parser.reconstruct_cond_batch(uccc, self.step)
+        # else:
+        #     print("[smZNodes] WARNING: uncond has no attribute `cond`")
         assert not is_edit_model or all(len(conds) == 1 for conds in conds_list), "AND is not supported for InstructPix2Pix checkpoint (unless using Image CFG scale = 1.0)"
 
         batch_size = len(conds_list)
@@ -102,11 +104,17 @@ class CFGDenoiser(torch.nn.Module):
         #     else:
         #         make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [c_crossattn], "c_concat": [c_concat]}
 
-        image_uncond = image_cond
-        if isinstance(uncond, dict):
-            make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None}
+        # unclip
+        # if shared.sd_model.model.conditioning_key == "crossattn-adm":
+        if False:
+            image_uncond = torch.zeros_like(image_cond)
+            make_condition_dict = lambda c_crossattn, c_adm: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_adm": c_adm} # pylint: disable=C3001
         else:
-            make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_concat": None} # pylint: disable=C3001
+            image_uncond = image_cond
+            if isinstance(uncond, dict):
+                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm":c_adm },
+            else:
+                make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_concat": None, "c_adm": c_adm} # pylint: disable=C3001
 
         if not is_edit_model:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])
@@ -132,17 +140,17 @@ class CFGDenoiser(torch.nn.Module):
             x_in = x_in[:-batch_size]
             sigma_in = sigma_in[:-batch_size]
 
-        # self.padded_cond_uncond = False
-        # if shared.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
-        #     empty = shared.sd_model.cond_stage_model_empty_prompt
-        #     num_repeats = (tensor.shape[1] - uncond.shape[1]) // empty.shape[1]
+        self.padded_cond_uncond = False
+        if shared.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
+            empty = shared.sd_model.cond_stage_model_empty_prompt
+            num_repeats = (tensor.shape[1] - uncond.shape[1]) // empty.shape[1]
 
-        #     if num_repeats < 0:
-        #         tensor = pad_cond(tensor, -num_repeats, empty)
-        #         self.padded_cond_uncond = True
-        #     elif num_repeats > 0:
-        #         uncond = pad_cond(uncond, num_repeats, empty)
-        #         self.padded_cond_uncond = True
+            if num_repeats < 0:
+                tensor = pad_cond(tensor, -num_repeats, empty)
+                self.padded_cond_uncond = True
+            elif num_repeats > 0:
+                uncond = pad_cond(uncond, num_repeats, empty)
+                self.padded_cond_uncond = True
 
         if tensor.shape[1] == uncond.shape[1] or skip_uncond:
             if is_edit_model:

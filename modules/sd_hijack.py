@@ -1,44 +1,90 @@
 import torch
+import comfy
 import copy
+from torch.nn.functional import silu
 from types import MethodType
 from comfy.sd import CLIP
-from . import devices
-from ..smZNodes import FrozenCLIPEmbedderWithCustomWordsCustom, get_learned_conditioning
+from comfy.sdxl_clip import SDXLClipModel
+from comfy import ldm
+from . import devices, shared, sd_hijack_unet, sd_hijack_optimizations, script_callbacks, errors
+from .textual_inversion import textual_inversion
+from ..smZNodes import FrozenCLIPEmbedderWithCustomWordsCustom, FrozenOpenCLIPEmbedder2WithCustomWordsCustom, get_learned_conditioning
+from functools import partial
+if not hasattr(ldm.modules.diffusionmodules.model, "nonlinearity_orig"):
+    ldm.modules.diffusionmodules.model.nonlinearity_orig = ldm.modules.diffusionmodules.model.nonlinearity
+if not hasattr(ldm.modules.diffusionmodules.openaimodel, "th_orig"):
+    ldm.modules.diffusionmodules.openaimodel.th_orig = ldm.modules.diffusionmodules.openaimodel.th
 
-class EmbeddingDatabase:
-    def __init__(self):
-        self.ids_lookup = {}
-        self.word_embeddings = {}
-        self.skipped_embeddings = {}
-        self.expected_shape = -1
-        self.embedding_dirs = {}
-        self.previously_displayed_embeddings = ()
+optimizers = []
+current_optimizer: sd_hijack_optimizations.SdOptimization = None
+already_optimized = False # temp fix for displaying info since two cliptextencode's will run
 
-    def register_embedding(self, embedding, model):
-        self.word_embeddings[embedding.name] = embedding
+def list_optimizers():
+    script_callbacks.on_list_optimizers(sd_hijack_optimizations.list_optimizers)
+    new_optimizers = script_callbacks.list_optimizers_callback()
 
-        ids = model.cond_stage_model.tokenize([embedding.name])[0]
+    new_optimizers = [x for x in new_optimizers if x.is_available()]
 
-        first_id = ids[0]
-        if first_id not in self.ids_lookup:
-            self.ids_lookup[first_id] = []
+    new_optimizers = sorted(new_optimizers, key=lambda x: x.priority, reverse=True)
 
-        self.ids_lookup[first_id] = sorted(self.ids_lookup[first_id] + [(ids, embedding)], key=lambda x: len(x[0]), reverse=True)
+    optimizers.clear()
+    optimizers.extend(new_optimizers)
 
-        return embedding
 
-    def find_embedding_at_position(self, tokens, offset):
-        token = tokens[offset]
-        possible_matches = self.ids_lookup.get(token, None)
+def apply_optimizations(option=None, display=True):
+    global already_optimized
+    if already_optimized:
+        display = False
+    list_optimizers()
+    global current_optimizer
 
-        if possible_matches is None:
-            return None, None
+    undo_optimizations()
 
-        for ids, embedding in possible_matches:
-            if tokens[offset:offset + len(ids)] == ids:
-                return embedding, len(ids)
+    if len(optimizers) == 0:
+        # a script can access the model very early, and optimizations would not be filled by then
+        current_optimizer = None
+        return ''
 
-        return None, None
+    ldm.modules.diffusionmodules.model.nonlinearity = silu
+    ldm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
+
+    # sgm.modules.diffusionmodules.model.nonlinearity = silu
+    # sgm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
+
+    if current_optimizer is not None:
+        # current_optimizer.undo()
+        current_optimizer = None
+
+    selection = option or shared.opts.cross_attention_optimization
+    if selection == "Automatic" and len(optimizers) > 0:
+        matching_optimizer = next(iter([x for x in optimizers if x.cmd_opt and getattr(shared.cmd_opts, x.cmd_opt, False)]), optimizers[0])
+    else:
+        matching_optimizer = next(iter([x for x in optimizers if x.cmd_opt == selection]), None)
+    if selection == "None":
+        matching_optimizer = None
+    elif selection == "Automatic" and shared.cmd_opts.disable_opt_split_attention:
+        matching_optimizer = None
+    elif matching_optimizer is None:
+        matching_optimizer = optimizers[0]
+
+    if matching_optimizer is not None:
+        if display:
+            print(f"Applying attention optimization: {matching_optimizer.name}... ", end='')
+        matching_optimizer.apply()
+        already_optimized = True
+        if display:
+            print("done.")
+        current_optimizer = matching_optimizer
+        return current_optimizer
+    else:
+        # if display:
+            # print("Disabling attention optimization")
+        return ''
+
+def undo_optimizations():
+    sd_hijack_optimizations.undo()
+    ldm.modules.diffusionmodules.model.nonlinearity = ldm.modules.diffusionmodules.model.nonlinearity_orig
+    ldm.modules.diffusionmodules.openaimodel.th = ldm.modules.diffusionmodules.openaimodel.th_orig
 
 class StableDiffusionModelHijack:
     fixes = None
@@ -48,80 +94,86 @@ class StableDiffusionModelHijack:
     clip = None
     tokenizer = None
     optimization_method = None
-    embedding_db = EmbeddingDatabase()
-    # embedding_db = modules.textual_inversion.textual_inversion.EmbeddingDatabase()
+    embedding_db = textual_inversion.EmbeddingDatabase()
 
-    # def __init__(self):
-    #     self.embedding_db.add_embedding_dir(opts.embeddings_dir)
+    def apply_optimizations(self, option=None):
+        try:
+            self.optimization_method = apply_optimizations(option)
+        except Exception as e:
+            errors.display(e, "applying optimizations")
+            undo_optimizations()
 
-    def hijack(self, m:CLIP):
-
-        if "SD1ClipModel" == type(m.cond_stage_model).__name__:
-            self.clip_orig: CLIP = m.clone()
+    def hijack(self, m: CLIP):
+        self.clip_orig: CLIP = m.clone()
+        if type(m.cond_stage_model) == SDXLClipModel:
+            def assign_funcs(clip_type):
+                mc = getattr(m.cond_stage_model, clip_type)
+                model_embeddings = mc.transformer.text_model.embeddings
+                model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self, textual_inversion_key = clip_type)
+                model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight').to(device=devices.device)
+                mc_tok = getattr(self.clip_orig.tokenizer, clip_type)
+                mc.tokenizer = mc_tok.tokenizer
+                mc.tokenizer_parent = mc_tok
+                setattr(m.cond_stage_model, clip_type,
+                        FrozenCLIPEmbedderWithCustomWordsCustom(mc, self) if clip_type == "clip_l" else FrozenOpenCLIPEmbedder2WithCustomWordsCustom(mc, self))
+                mc = getattr(m.cond_stage_model, clip_type)
+                mc.clip_layer = getattr(mc.wrapped, "clip_layer", None)
+                mc.reset_clip_layer = getattr(mc.wrapped, "reset_clip_layer", None)
+                # Doesn't do anything
+                m.cond_stage_model.cond_stage_forward = "forward"
+                mc.get_learned_conditioning = MethodType(get_learned_conditioning, mc)
+            assign_funcs("clip_l")
+            assign_funcs("clip_g")
+        else:
             model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
             model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
-            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
+            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight').to(device=devices.device)
+            m.cond_stage_model.tokenizer = self.clip_orig.tokenizer.tokenizer
+            m.cond_stage_model.tokenizer_parent = self.clip_orig.tokenizer
             m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
-
-            self.cond_stage_model = m.cond_stage_model
-
+            m.cond_stage_model.clip_layer = getattr(m.cond_stage_model.wrapped, "clip_layer", None)
+            m.cond_stage_model.reset_clip_layer = getattr(m.cond_stage_model.wrapped, "reset_clip_layer", None)
+            
             # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
             # The is no `get_learned_conditioning()` so we add it, but make it
             # use our `m.cond_stage_model.forward()` which runs `torch.nn.Module`'s `forward()` function
             # from `FrozenCLIPEmbedderWithCustomWordsBase`
             m.cond_stage_forward = "forward"
             m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
-
-            self.clip = m.cond_stage_model
-        elif "SDXLClipModel" == type(m.cond_stage_model).__name__:
-            self.clip_orig: CLIP = copy.copy(m.clone())
-            model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
-            model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
-            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
-            m.cond_stage_model.clip_g = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model.clip_g, self, "clip_g")
-            m.cond_stage_model.clip_g.clip_layer = m.cond_stage_model.clip_g.wrapped.clip_layer
-            m.cond_stage_model.clip_g.reset_clip_layer = m.cond_stage_model.clip_g.wrapped.reset_clip_layer
-
-            model_embeddings = m.cond_stage_model.clip_l.transformer.text_model.embeddings
-            model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
-            model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight')
-            m.cond_stage_model.clip_l = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model.clip_l, self, "clip_l")
-            m.cond_stage_model.clip_l.clip_layer = m.cond_stage_model.clip_l.wrapped.clip_layer
-            m.cond_stage_model.clip_l.reset_clip_layer = m.cond_stage_model.clip_l.wrapped.reset_clip_layer
-
-            self.cond_stage_model = m.cond_stage_model
-            # self.cond_stage_model.clip_g = m.cond_stage_model.clip_g
-            # self.cond_stage_model.clip_l = m.cond_stage_model.clip_l
-
-            m.cond_stage_forward = "forward"
-            m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
-
-            self.clip = m.cond_stage_model
+        
+        self.cond_stage_model = m.cond_stage_model
+        self.clip = m.cond_stage_model
 
         apply_weighted_forward(self.clip)
+        self.apply_optimizations()
 
     def undo_hijack(self, m):
-        if "SDXLClipModel" == type(m.cond_stage_model).__name__:
-            m.cond_stage_model.clip_g = m.cond_stage_model.clip_g.wrapped
-            model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
-            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+        try:
+            if "SDXLClipModel" == type(m.cond_stage_model).__name__:
+                m.cond_stage_model.clip_l = m.cond_stage_model.clip_l.wrapped
+                model_embeddings_l = m.cond_stage_model.clip_l.transformer.text_model.embeddings
+                if type(model_embeddings_l.token_embedding) == EmbeddingsWithFixes:
+                    model_embeddings_l.token_embedding = model_embeddings_l.token_embedding.wrapped
 
-            m.cond_stage_model.clip_l = m.cond_stage_model.clip_l.wrapped
-            model_embeddings = m.cond_stage_model.clip_l.transformer.text_model.embeddings
-            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
-        else:
-            m.cond_stage_model = m.cond_stage_model.wrapped
-            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
-            if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-                model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
-        # undo_optimizations()
-        undo_weighted_forward(m)
-        self.apply_circular(False)
-        # self.layers = None
-        self.clip = None
-        self.cond_stage_model = None
+                if hasattr(m.cond_stage_model.clip_g.wrapped, "encode_token_weights_orig"):
+                    m.cond_stage_model.clip_g.wrapped.encode_token_weights = m.cond_stage_model.clip_g.wrapped.encode_token_weights_orig
+                m.cond_stage_model.clip_g = m.cond_stage_model.clip_g.wrapped
+                model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
+                if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                    model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+            else:
+                m.cond_stage_model = m.cond_stage_model.wrapped
+                model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
+                if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                    model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+            undo_optimizations()
+            undo_weighted_forward(m)
+            self.apply_circular(False)
+            # self.layers = None
+            self.clip = None
+            self.cond_stage_model = None
+        except Exception as err:
+            print(err)
 
     def apply_circular(self, enable):
         if self.circular_enabled == enable:
@@ -192,7 +244,7 @@ def undo_weighted_forward(sd_model):
 
 
 class EmbeddingsWithFixes(torch.nn.Module):
-    def __init__(self, wrapped, embeddings):
+    def __init__(self, wrapped, embeddings, textual_inversion_key='clip_l'):
         super().__init__()
         self.wrapped = wrapped
         self.embeddings = embeddings
@@ -201,7 +253,10 @@ class EmbeddingsWithFixes(torch.nn.Module):
         batch_fixes = self.embeddings.fixes
         self.embeddings.fixes = None
 
-        inputs_embeds = self.wrapped(input_ids)
+        try:
+            inputs_embeds = self.wrapped(input_ids)
+        except:
+            inputs_embeds = self.wrapped(input_ids.cpu())
 
         if batch_fixes is None or len(batch_fixes) == 0 or max([len(x) for x in batch_fixes]) == 0:
             return inputs_embeds
@@ -209,7 +264,8 @@ class EmbeddingsWithFixes(torch.nn.Module):
         vecs = []
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
-                emb = devices.cond_cast_unet(embedding.vec)
+                vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
+                emb = devices.cond_cast_unet(vec)
                 if emb.device != tensor.device:
                     emb = emb.to(device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])

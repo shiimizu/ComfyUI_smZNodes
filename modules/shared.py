@@ -1,8 +1,15 @@
 from comfy.model_management import vram_state, VRAMState
 import logging
+import sys
+from comfy.cli_args import args
+from comfy import model_management
+from . import devices
 
 log = logging.getLogger("sd")
 options_templates = {}
+loaded_hypernetworks = []
+xformers_available = model_management.XFORMERS_IS_AVAILABLE
+device = devices.device
 
 class Options:
     data = None
@@ -39,13 +46,13 @@ opts.data['prompt_attention'] = 'A1111 parser'
 opts.data['comma_padding_backtrack'] = None
 opts.data['prompt_mean_norm'] = True
 opts.data["comma_padding_backtrack"] = 20
-opts.data["clip_skip"] = None
+opts.data["CLIP_stop_at_last_layers"] = 1
 opts.data['enable_emphasis'] = True
 opts.data['use_old_emphasis_implementation'] = False
 opts.data['disable_nan_check'] = True
-opts.data['always_batch_cond_uncond'] = False
 opts.data['pad_cond_uncond'] = False
-
+opts.data['upcast_sampling'] = sys.platform == "darwin"
+opts.data['upcast_attn'] = not args.dont_upcast_attention
 
 opts.data['use_CFGDenoiser'] = False
 opts.data['disable_max_denoise'] = False
@@ -56,5 +63,26 @@ opts.data['sdxl_crop_left'] = 0
 opts.data['sdxl_refiner_low_aesthetic_score'] = 2.5
 opts.data['sdxl_refiner_high_aesthetic_score'] = 6.0
 
-# batch_cond_uncond = cmd_opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
-batch_cond_uncond = opts.always_batch_cond_uncond or not (vram_state == VRAMState.LOW_VRAM or vram_state == VRAMState.NORMAL_VRAM)
+
+cmd_opts = Options()
+
+cmd_opts.always_batch_cond_uncond = False
+cmd_opts.lowvram = vram_state == VRAMState.LOW_VRAM
+cmd_opts.medvram = vram_state == VRAMState.NORMAL_VRAM
+should_batch_cond_uncond = lambda: cmd_opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
+batch_cond_uncond = should_batch_cond_uncond()
+
+cmd_opts.xformers = xformers_available
+cmd_opts.force_enable_xformers = xformers_available
+
+opts.cross_attention_optimization = "None"
+# opts.cross_attention_optimization = "opt_sdp_no_mem_attention"
+# opts.cross_attention_optimization = "opt_sub_quad_attention"
+cmd_opts.sub_quad_q_chunk_size = 512
+cmd_opts.sub_quad_kv_chunk_size = 512
+cmd_opts.sub_quad_chunk_threshold = 80
+cmd_opts.token_merging_ratio = 0.0
+cmd_opts.token_merging_ratio_img2img = 0.0
+cmd_opts.token_merging_ratio_hr = 0.0
+cmd_opts.sd_vae_sliced_encode = False
+cmd_opts.disable_opt_split_attention = False

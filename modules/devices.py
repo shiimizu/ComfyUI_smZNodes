@@ -1,12 +1,64 @@
+import sys
+import contextlib
 import torch
 from . import shared
+from comfy import model_management
 
-device=None
+if sys.platform == "darwin":
+    from . import mac_specific
+
+
+def has_mps() -> bool:
+    if sys.platform != "darwin":
+        return False
+    else:
+        return mac_specific.has_mps
+
+cpu = torch.device("cpu")
+device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
+dtype = torch.float16
+dtype_vae = torch.float16
 dtype_unet = torch.float16
 unet_needs_upcast = False
 
-def cond_cast_unet(tensor: torch.Tensor):
-    return tensor.to(dtype=dtype_unet) if unet_needs_upcast else tensor
+def cond_cast_unet(input):
+    return input.to(dtype_unet) if unet_needs_upcast else input
+
+
+def cond_cast_float(input):
+    return input.float() if unet_needs_upcast else input
+
+
+def randn(seed, shape):
+    from modules.shared import opts
+
+    torch.manual_seed(seed)
+    if opts.randn_source == "CPU" or device.type == 'mps':
+        return torch.randn(shape, device=cpu).to(device)
+    return torch.randn(shape, device=device)
+
+
+def randn_without_seed(shape):
+    from modules.shared import opts
+
+    if opts.randn_source == "CPU" or device.type == 'mps':
+        return torch.randn(shape, device=cpu).to(device)
+    return torch.randn(shape, device=device)
+
+def autocast(disable=False):
+    if disable:
+        return contextlib.nullcontext()
+
+    if dtype == torch.float32 or model_management.get_torch_device() == torch.device("mps"): # or shared.cmd_opts.precision == "full":
+        return contextlib.nullcontext()
+
+    # only cuda
+    autocast_device = model_management.get_autocast_device(model_management.get_torch_device())
+    # autocast_device = "cuda"
+    return torch.autocast(autocast_device)
+
+def without_autocast(disable=False):
+    return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() and not disable else contextlib.nullcontext()
 
 class NansException(Exception):
     pass

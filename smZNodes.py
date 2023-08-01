@@ -553,16 +553,26 @@ class CFGNoisePredictor(torch.nn.Module):
         self.alphas_cumprod = model.alphas_cumprod
 
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        cond[0][0].cond = cond[0][1].get('cond_', None)
-        uncond[0][0].cond = uncond[0][1].get('cond_', None)
-        image_cond = txt2img_image_conditioning(None, x)
         c_adm = None
-        try:
-            if cond[0][1].get("adm_encoded", None) != None:
-                c_adm = torch.cat([uncond[0][1]['adm_encoded'], cond[0][1]['adm_encoded']]).to(device=self.inner_model.device)
-        except:
-            pass
-        out = self.inner_model(x, timestep, cond=cond[0][0], uncond=uncond[0][0], cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond, c_adm=c_adm)
+        if cond[0][1].get("adm_encoded", None) != None:
+            c_adm = torch.cat([uncond[0][1]['adm_encoded'], cond[0][1]['adm_encoded']])
+        cond_ = cond[0][1].get('cond_', None)
+        ucond_ = uncond[0][1].get('cond_', None)
+        co = cond[0][0]
+        unc = uncond[0][0]
+        if c_adm != None:
+            if unc.shape[1] < co.shape[1]:
+                num_repetitions = co.shape[1] // unc.shape[1]
+                expanded_tensor2 = torch.cat([unc] + [torch.zeros_like(unc) for _ in range(num_repetitions - 1)], dim=1)
+                unc = expanded_tensor2
+            elif co.shape[1] < unc.shape[1]:
+                num_repetitions = unc.shape[1] // co.shape[1]
+                expanded_tensor2 = torch.cat([co] + [torch.zeros_like(co) for _ in range(num_repetitions - 1)], dim=1)
+                co = expanded_tensor2
+        co.cond = cond_
+        unc.cond = ucond_
+        image_cond = txt2img_image_conditioning(None, x)
+        out = self.inner_model(x, timestep, cond=co, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond, c_adm=c_adm)
         return out
 
 def set_model_k(self: KSampler):

@@ -45,7 +45,7 @@ class smZ_CLIPTextEncode:
         if is_sdxl:
             # Prevents tensor shape mismatch
             shared.cmd_opts.always_batch_cond_uncond = True
-            shared.batch_cond_uncond = shared.should_batch_cond_uncond()
+            shared.batch_cond_uncond = True
 
         dtype = torch.float16 if comfy.model_management.should_use_fp16(device=devices.device) else torch.float32
         devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else (_dtype if (_dtype:=clip.patcher.model_dtype() != None) else dtype)

@@ -112,9 +112,9 @@ class CFGDenoiser(torch.nn.Module):
         else:
             image_uncond = image_cond
             if isinstance(uncond, dict):
-                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm":c_adm },
+                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm": c_adm }
             else:
-                make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_concat": None, "c_adm": c_adm} # pylint: disable=C3001
+                make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn if type(c_crossattn) is list else [c_crossattn], "c_concat": None, "c_adm": c_adm}
 
         if not is_edit_model:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])

@@ -5,12 +5,20 @@ A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/Comf
 # CLIP Text Encode++
 
 <p align="center">
-    <img width="335" alt="Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/dd69a7ae-c3ab-4935-a71e-a117b6d0113b">
+    <div class="row">
+        <p align="center">
+        <img width="335" alt="Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/582132fd-0c1f-4ddc-ad32-3c8ef4884b4f">
+        <img width="447" alt="With SDXL" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/d79126f1-3339-448f-b7fb-66d4063508c8"></p>
+    </div>
 </p>
+
+
+
 
 Achieve identical embeddings from [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
-This means you can reproduce the same images generated on `stable-diffusion-webui` (and its forks) as on `ComfyUI`.
+
+This means you can reproduce the same images generated from `stable-diffusion-webui` (and its forks) on `ComfyUI`.
 
 Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser.
 
@@ -44,7 +52,7 @@ Image slider links:
 |`use_CFGDenoiser`|An experimental option to use `stable-diffusion-webui`'s denoiser. It may not work as expected with inpainting or UnCLIP models but it allows you to get _identical_ images _regardless_ of the prompt. The denoiser will be used for every sampler using the conditioning if it is set to `true` on either one of your positive or negative nodes. To turn it off, set it to `false` for both nodes. |
 
 > **Note**  
-> You can right click the node to show/hide some of the widgets.
+> You can right click the node to show/hide some of the widgets. E.g. the `show_SDXL` option.
 
 <br>
 
@@ -64,10 +72,9 @@ Image slider links:
 > Does not support [prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing).
 
 ## Tips to get reproducible results on both UIs
-- Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion.
+- Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion. Or if you insist on using the GPU, try using the KSampler GPU node. 
 - Use the same seed, sampler settings, and clip skip (CLIP Set Last Layer).
-- Use `--force-fp32`
-- Use non-ancestral samplers.
+- Ancestral samplers may not be predictable.
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.
 

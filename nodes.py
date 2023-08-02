@@ -5,7 +5,8 @@ from .modules import sd_hijack
 from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
 from comfy.cli_args import args
 from comfy.sdxl_clip import SDXLClipModel
-from nodes import MAX_RESOLUTION
+from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
+from nodes import MAX_RESOLUTION, CLIPTextEncode
 import comfy.sd
 import comfy.model_management
 import torch
@@ -77,33 +78,41 @@ class smZ_CLIPTextEncode:
                 opts.disable_max_denoise = True
                 opts.use_CFGDenoiser = use_CFGDenoiser
 
+            sdxl_conds = {}
+            if with_SDXL and is_sdxl:
+                sdxl_conds = {
+                    "aesthetic_score": ascore, "width": width, "height": height,
+                    "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width,
+                    "target_height": target_height, "text_g": text_g, "text_l": text_l
+                }
             pooled={}
-            if "comfy" in parser:
-                tokens = clip.tokenize(text)
-                if parser == "comfy++":
-                    if is_sdxl:
-                        raise NotImplementedError
-                    clip_clone = clip.clone()
-                    model_hijack.hijack(clip_clone)
-                    try:
-                        zs = []
-                        for batch_chunk in tokens:
-                            tokens_ = [x[0] for x in batch_chunk]
-                            multipliers = [x[1] for x in batch_chunk]
-                            z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
-                            zs.append(z)
-                        zcond = torch.hstack(zs)
-                        model_hijack.undo_hijack(clip_clone)
-                    except Exception as err:
-                        model_hijack.undo_hijack(clip_clone)
-                        raise err
-
-                    cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
-                    cond=zcond
-                    pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
+            if parser == "comfy":
+                if with_SDXL and is_sdxl:
+                    return CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
                 else:
-                    cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
-                    pooled = {"pooled_output": pooled}
+                    return CLIPTextEncode().encode(clip, text)
+            elif parser == "comfy++":
+                tokens = clip.tokenize(text)
+                if is_sdxl:
+                    raise NotImplementedError
+                clip_clone = clip.clone()
+                model_hijack.hijack(clip_clone)
+                try:
+                    zs = []
+                    for batch_chunk in tokens:
+                        tokens_ = [x[0] for x in batch_chunk]
+                        multipliers = [x[1] for x in batch_chunk]
+                        z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
+                        zs.append(z)
+                    zcond = torch.hstack(zs)
+                    model_hijack.undo_hijack(clip_clone)
+                except Exception as err:
+                    model_hijack.undo_hijack(clip_clone)
+                    raise err
+
+                cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
+                cond=zcond
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
                 return ([[cond, pooled ]], )
             else:
                 texts = [text]
@@ -137,13 +146,6 @@ class smZ_CLIPTextEncode:
                 except Exception as err:
                     model_hijack.undo_hijack(clip_clone)
                     raise err
-                sdxl_conds = {}
-                if with_SDXL and is_sdxl:
-                    sdxl_conds = {
-                        "aesthetic_score": ascore, "width": width, "height": height,
-                        "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width,
-                        "target_height": target_height, "text_g": text_g, "text_l": text_l
-                    }
                 pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "cond_": cond.cond, **sdxl_conds}
             return ([[cond, pooled ]], )
 

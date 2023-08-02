@@ -5,6 +5,7 @@ from .modules import sd_hijack
 from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
 from comfy.cli_args import args
 from comfy.sdxl_clip import SDXLClipModel
+from nodes import MAX_RESOLUTION
 import comfy.sd
 import comfy.model_management
 import torch
@@ -19,22 +20,32 @@ class smZ_CLIPTextEncode:
                 "clip": ("CLIP", ),
                 "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
                 # whether weights are normalized by taking the mean
-                "mean_normalization": ([False, True],{"default": True}),
-                "multi_conditioning": ([False, True],{"default": True}),
-                "use_old_emphasis_implementation": ([False, True],{"default": False}),
-                "use_CFGDenoiser": ([False, True],{"default": False}),
+                "mean_normalization": ("BOOLEAN", {"default": True}),
+                "multi_conditioning": ("BOOLEAN", {"default": True}),
+                "use_old_emphasis_implementation": ("BOOLEAN", {"default": False}),
+                "use_CFGDenoiser": ("BOOLEAN", {"default": False}),
+                "with_SDXL": ("BOOLEAN", {"default": False}),
+                "ascore": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
+                "width": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
+                "height": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
+                "crop_w": ("INT", {"default": 0, "min": 0, "max": MAX_RESOLUTION}),
+                "crop_h": ("INT", {"default": 0, "min": 0, "max": MAX_RESOLUTION}),
+                "target_width": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
+                "target_height": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
+                "text_g": ("STRING", {"multiline": True, "default": "CLIP_G"}), "clip": ("CLIP", ),
+                "text_l": ("STRING", {"multiline": True, "default": "CLIP_L"}), "clip": ("CLIP", ),
             },
             "hidden": {
-                "with_SDXL": ([False, True],{"default": False}),
-                "text_g": ("STRING", {"multiline": True, "default": "CLIP_G"}),
-                "text_l": ("STRING", {"multiline": True, "default": "CLIP_L"}),
             }
         }
     RETURN_TYPES = ("CONDITIONING",)
     FUNCTION = "encode"
     CATEGORY = "conditioning"
 
-    def encode(self, clip: comfy.sd.CLIP, text: str, parser: str, mean_normalization: bool, multi_conditioning: bool, use_old_emphasis_implementation: bool, use_CFGDenoiser:bool,with_SDXL=False,text_g="",text_l=""):
+    def encode(self, clip: comfy.sd.CLIP, text, parser, mean_normalization,
+               multi_conditioning, use_old_emphasis_implementation,
+               use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
+               crop_h, target_width, target_height, text_g, text_l):
         devices.device = clip.patcher.load_device
         shared.device = devices.device
         # devices.device = comfy.model_management.get_torch_device()
@@ -127,7 +138,13 @@ class smZ_CLIPTextEncode:
                     model_hijack.undo_hijack(clip_clone)
                     raise err
                 sdxl_conds = {}
-                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "cond_":cond.cond, **sdxl_conds}
+                if with_SDXL and is_sdxl:
+                    sdxl_conds = {
+                        "aesthetic_score": ascore, "width": width, "height": height,
+                        "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width,
+                        "target_height": target_height, "text_g": text_g, "text_l": text_l
+                    }
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "cond_": cond.cond, **sdxl_conds}
             return ([[cond, pooled ]], )
 
         result = run()

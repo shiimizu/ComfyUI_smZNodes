@@ -24,7 +24,29 @@ function toggleWidget(node, widget, show = false, suffix = "") {
 }
 
 function widgetLogic(node, widget) {
-	if (widget.name === 'parser') {
+    if (widget.name === 'with_SDXL') {
+        if (!widget.value) {
+			toggleWidget(node, findWidgetByName(node, 'ascore'))
+			toggleWidget(node, findWidgetByName(node, 'width'))
+			toggleWidget(node, findWidgetByName(node, 'height'))
+			toggleWidget(node, findWidgetByName(node, 'crop_w'))
+			toggleWidget(node, findWidgetByName(node, 'crop_h'))
+			toggleWidget(node, findWidgetByName(node, 'target_width'))
+			toggleWidget(node, findWidgetByName(node, 'target_height'))
+			toggleWidget(node, findWidgetByName(node, 'text_g'))
+			toggleWidget(node, findWidgetByName(node, 'text_l'))
+		} else {
+			toggleWidget(node, findWidgetByName(node, 'ascore'), true)
+			toggleWidget(node, findWidgetByName(node, 'width'), true)
+			toggleWidget(node, findWidgetByName(node, 'height'), true)
+			toggleWidget(node, findWidgetByName(node, 'crop_w'), true)
+			toggleWidget(node, findWidgetByName(node, 'crop_h'), true)
+			toggleWidget(node, findWidgetByName(node, 'target_width'), true)
+			toggleWidget(node, findWidgetByName(node, 'target_height'), true)
+			toggleWidget(node, findWidgetByName(node, 'text_g'), true)
+			toggleWidget(node, findWidgetByName(node, 'text_l'), true)
+		}
+	} else if (widget.name === 'parser') {
 		if (widget.value.includes("comfy")) {
 			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'))
 			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'))
@@ -40,9 +62,17 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
 		}
 	}
+    // Keep showing the SDXL widget if the node is cloned
+    if (widget.name === 'ascore') {
+        const ascore_widget = findWidgetByName(node, 'ascore')
+        const showing = !(ascore_widget.type == "smZhidden" )
+		if (showing)
+            toggleWidget(node, findWidgetByName(node, 'with_SDXL'), true)
+    }
 }
 
-const getSetWidgets = ['parser', 'mean_normalization', 'multi_conditioning']
+// const getSetWidgets = ['parser', 'mean_normalization', 'multi_conditioning', 'use_old_emphasis_implementation', 'use_CFGDenoiser', 'with_SDXL']
+const getSetWidgets = ['parser', 'ascore', 'with_SDXL']
 
 function getSetters(node) {
 	if (node.widgets)
@@ -65,6 +95,16 @@ function getSetters(node) {
 		}
 }
 
+function toggleMenuOption(node, widget_name) {
+    let widget = findWidgetByName(node, widget_name)
+    if (!widget || doesInputWithNameExist(node, widget.name)) return;
+    if (!origProps[widget.name]) {
+        origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
+    }
+    toggleWidget(node, widget, !(widget.type === origProps[widget.name].origType))
+    node.setDirtyCanvas(true);
+}
+
 app.registerExtension({
 	name: "comfy.smZ.dynamicWidgets",
 	beforeRegisterNodeDef(nodeType, nodeData, app) {
@@ -73,7 +113,17 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 let that = this;
                 const r = onNodeCreated ? onNodeCreated.apply(that, arguments) : undefined;
-                // console.log(that.getExtraMenuOptions)
+
+                // Hide SDXL widgets on init
+                const wname = getSetWidgets[2]
+                let wt = findWidgetByName(that, wname)
+                // wt.value will always be false and doesInputWithNameExist()
+                // doesn't work here since we're inside beforeRegisterNodeDef
+                if (wt && !wt.value)
+                    toggleMenuOption(that, wname)
+
+                // Reduce node size cause of SDXL widgets
+                that.setSize([that.size[0], that.size[0]/2.0])
 
                 // Save the original options
                 const getBaseMenuOptions = that.getExtraMenuOptions;
@@ -85,13 +135,7 @@ app.registerExtension({
                     let create_custom_option = (content, widget_name) => ({
                         content: content,
                         callback: () => {
-                            let widget = findWidgetByName(this, widget_name)
-                            if (!widget || doesInputWithNameExist(this, widget.name)) return;
-                            if (!origProps[widget.name]) {
-                                origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
-                            }
-                            toggleWidget(this, widget, !(widget.type === origProps[widget.name].origType))
-                            this.setDirtyCanvas(true);
+                            toggleMenuOption(this, widget_name)
                         },
                     })
 
@@ -107,6 +151,10 @@ app.registerExtension({
                         {
                             content: "Hide/show ",
                             widget_name: "use_CFGDenoiser"
+                        },
+                        {
+                            content: "Hide/show ",
+                            widget_name: "with_SDXL"
                         },
                     ].map(x => create_custom_option(x.content + x.widget_name, x.widget_name))
 

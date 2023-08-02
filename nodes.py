@@ -88,7 +88,9 @@ class smZ_CLIPTextEncode:
             pooled={}
             if parser == "comfy":
                 if with_SDXL and is_sdxl:
-                    return CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
+                    out = CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
+                    out[0][0][1]['aesthetic_score'] = sdxl_conds['aesthetic_score']
+                    return out
                 else:
                     return CLIPTextEncode().encode(clip, text)
             elif parser == "comfy++":

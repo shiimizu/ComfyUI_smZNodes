@@ -283,18 +283,34 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     tokens=texts
     partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
 
-    def assign_funcs(mc):
+    def assign_funcs(mc, fn=None):
         mc.encode_token_weights_orig = mc.encode_token_weights
-        mc.encode_token_weights = MethodType(partial_method, mc)
+        mc.encode_token_weights = MethodType(partial_method, mc) if fn == None else fn
     def restore_funcs(mc):
         if hasattr(mc, "encode_token_weights_orig"):
             mc.encode_token_weights_orig = mc.encode_token_weights
+
+    def encode_token_weights_sdxl(self, token_weight_pairs):
+        token_weight_pairs_g = token_weight_pairs["g"]
+        token_weight_pairs_l = token_weight_pairs["l"]
+        g_out, g_pooled = clip.cond_stage_model.clip_g.encode_token_weights(token_weight_pairs_g)
+        l_out, l_pooled = clip.cond_stage_model.clip_l.encode_token_weights(token_weight_pairs_l)
+        def expand(t1, t2):
+            if t1.shape[1] < t2.shape[1]:
+                num_repetitions = t2.shape[1] // t1.shape[1]
+                return t1.repeat(1, num_repetitions, 1)
+            else:
+                return t1
+        l_out = expand(l_out, g_out)
+        g_out = expand(g_out, l_out)
+        return torch.cat([l_out, g_out], dim=-1), g_pooled
 
     class Context:
         def __init__(self):
             if type(clip.cond_stage_model) == SDXLClipModel:
                 assign_funcs(clip.cond_stage_model.clip_l)
                 assign_funcs(clip.cond_stage_model.clip_g)
+                assign_funcs(clip.cond_stage_model, MethodType(encode_token_weights_sdxl, clip.cond_stage_model))
             else:
                 assign_funcs(clip.cond_stage_model)
 
@@ -305,6 +321,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
             if type(clip.cond_stage_model) == SDXLClipModel:
                 restore_funcs(clip.cond_stage_model.clip_l)
                 restore_funcs(clip.cond_stage_model.clip_g)
+                restore_funcs(clip.cond_stage_model)
             else:
                 restore_funcs(clip.cond_stage_model)
 

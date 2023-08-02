@@ -61,7 +61,7 @@ class CFGDenoiser(torch.nn.Module):
 
         return denoised
 
-    def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond, c_adm=None):
+    def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond):
         model_management.throw_exception_if_processing_interrupted()
         # if state.interrupted or state.skipped:
         #     raise sd_samplers_common.InterruptedException
@@ -112,9 +112,9 @@ class CFGDenoiser(torch.nn.Module):
         else:
             image_uncond = image_cond
             if isinstance(uncond, dict):
-                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm": c_adm }
+                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm": x.c_adm }
             else:
-                make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn if type(c_crossattn) is list else [c_crossattn], "c_concat": None, "c_adm": c_adm}
+                make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn if type(c_crossattn) is list else [c_crossattn], "c_concat": None, "c_adm": x.c_adm}
 
         if not is_edit_model:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])

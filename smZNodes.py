@@ -556,23 +556,23 @@ class CFGNoisePredictor(torch.nn.Module):
         c_adm = None
         if cond[0][1].get("adm_encoded", None) != None:
             c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
+        x.c_adm = c_adm
+        def expand(t1, t2):
+            if t1.shape[1] < t2.shape[1]:
+                num_repetitions = t2.shape[1] // t1.shape[1]
+                return t1.repeat(1, num_repetitions, 1)
+            else:
+                return t1
         cond_ = cond[0][1].get('cond_', None)
         ucond_ = uncond[0][1].get('cond_', None)
         co = cond[0][0]
         unc = uncond[0][0]
-        if c_adm != None:
-            if unc.shape[1] < co.shape[1]:
-                num_repetitions = co.shape[1] // unc.shape[1]
-                expanded_tensor2 = torch.cat([unc] + [torch.zeros_like(unc) for _ in range(num_repetitions - 1)], dim=1)
-                unc = expanded_tensor2
-            elif co.shape[1] < unc.shape[1]:
-                num_repetitions = unc.shape[1] // co.shape[1]
-                expanded_tensor2 = torch.cat([co] + [torch.zeros_like(co) for _ in range(num_repetitions - 1)], dim=1)
-                co = expanded_tensor2
+        co = expand(co, unc)
+        unc = expand(unc, co)
         co.cond = cond_
         unc.cond = ucond_
         image_cond = txt2img_image_conditioning(None, x)
-        out = self.inner_model(x, timestep, cond=co, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond, c_adm=c_adm)
+        out = self.inner_model(x, timestep, cond=co, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
         return out
 
 def set_model_k(self: KSampler):

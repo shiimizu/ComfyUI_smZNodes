@@ -271,6 +271,18 @@ class Embedding:
         self.cached_checksum = f'{const_hash(self.vec.reshape(-1) * 100) & 0xffff:04x}'
         return self.cached_checksum
 
+
+def expand(t1, t2, empty_t, with_zeros=False):
+    if t1.shape[1] < t2.shape[1]:
+        if with_zeros:
+            num_repetitions = (t2.shape[1] - t1.shape[1]) // empty_t.shape[1]
+            return torch.cat([t1, empty_t.repeat((t1.shape[0], num_repetitions, 1))], axis=1)
+        else:
+            num_repetitions = t2.shape[1] // t1.shape[1]
+            return t1.repeat(1, num_repetitions, 1)
+    else:
+        return t1
+    
 def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=False):
     '''
     The function is our rendition of `clip.encode_from_tokens()`.
@@ -284,25 +296,39 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
 
     def assign_funcs(mc, fn=None):
-        mc.encode_token_weights_orig = mc.encode_token_weights
-        mc.encode_token_weights = MethodType(partial_method, mc) if fn == None else fn
+        mc.encode_token_weights_orig = partial(mc.encode_token_weights)
+        mc.encode_token_weights = MethodType(partial_method if fn == None else fn, mc)
     def restore_funcs(mc):
         if hasattr(mc, "encode_token_weights_orig"):
-            mc.encode_token_weights_orig = mc.encode_token_weights
+            mc.encode_token_weights = mc.encode_token_weights_orig
 
+    # Get the max chunk_count to pad the tokens on varying clip_g and clip_l lengths.
+    # To account for both positive and negative conditionings, opts.max_chunk_count is reset before sampling.
     def encode_token_weights_sdxl(self, token_weight_pairs):
+        if opts.encode_count >=2:
+            opts.max_chunk_count = 0
+            opts.encode_count = 0
         token_weight_pairs_g = token_weight_pairs["g"]
         token_weight_pairs_l = token_weight_pairs["l"]
-        g_out, g_pooled = clip.cond_stage_model.clip_g.encode_token_weights(token_weight_pairs_g)
-        l_out, l_pooled = clip.cond_stage_model.clip_l.encode_token_weights(token_weight_pairs_l)
-        def expand(t1, t2):
-            if t1.shape[1] < t2.shape[1]:
-                num_repetitions = t2.shape[1] // t1.shape[1]
-                return t1.repeat(1, num_repetitions, 1)
-            else:
-                return t1
-        l_out = expand(l_out, g_out)
-        g_out = expand(g_out, l_out)
+        opts.return_batch_chunks = True
+        _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
+        _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
+        opts.return_batch_chunks = False
+        try:
+            opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
+        except:
+            import pdb;pdb.set_trace()
+        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
+        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
+
+        with devices.autocast(), torch.no_grad():
+            empty_g = self.clip_g.encode_token_weights([""])[0]
+            empty_l = self.clip_l.encode_token_weights([""])[0]
+            empty = torch.cat([empty_l, empty_g], dim=-1)
+            shared.sd_model.cond_stage_model_empty_prompt_g = empty_g
+            shared.sd_model.cond_stage_model_empty_prompt_l = empty_l
+            shared.sd_model.cond_stage_model_empty_prompt = empty
+        opts.encode_count += 1
         return torch.cat([l_out, g_out], dim=-1), g_pooled
 
     class Context:
@@ -310,7 +336,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
             if type(clip.cond_stage_model) == SDXLClipModel:
                 assign_funcs(clip.cond_stage_model.clip_l)
                 assign_funcs(clip.cond_stage_model.clip_g)
-                assign_funcs(clip.cond_stage_model, MethodType(encode_token_weights_sdxl, clip.cond_stage_model))
+                assign_funcs(clip.cond_stage_model, encode_token_weights_sdxl)
             else:
                 assign_funcs(clip.cond_stage_model)
 
@@ -446,6 +472,9 @@ def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase
         texts = prompt_parser.SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
         # conds = model.get_learned_conditioning(texts)
         conds = model.forward(texts)
+        if opts.return_batch_chunks and conds is not torch.Tensor:
+            # It's safe to return early here since our input text is always one
+            return conds
         if first_pooled == None:
             # first_pooled = conds.pooled
             if conds.pooled.shape[0] > 1:
@@ -574,18 +603,10 @@ class CFGNoisePredictor(torch.nn.Module):
         if cond[0][1].get("adm_encoded", None) != None:
             c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
         x.c_adm = c_adm
-        def expand(t1, t2):
-            if t1.shape[1] < t2.shape[1]:
-                num_repetitions = t2.shape[1] // t1.shape[1]
-                return t1.repeat(1, num_repetitions, 1)
-            else:
-                return t1
         cond_ = cond[0][1].get('cond_', None)
         ucond_ = uncond[0][1].get('cond_', None)
         co = cond[0][0]
         unc = uncond[0][0]
-        co = expand(co, unc)
-        unc = expand(unc, co)
         co.cond = cond_
         unc.cond = ucond_
         image_cond = txt2img_image_conditioning(None, x)

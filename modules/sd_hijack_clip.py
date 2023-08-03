@@ -178,12 +178,22 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         """
         if opts.use_old_emphasis_implementation:
             from . import sd_hijack_clip_old
-            ret = sd_hijack_clip_old.forward_old(self, texts).cpu()
+            ret = sd_hijack_clip_old.forward_old(self, texts)
             return (ret, ret.pooled) if getattr(self.wrapped, 'return_pooled', False) else ret
         
         batch_chunks, _token_count = self.process_texts(texts)
         used_embeddings = {}
         chunk_count = max([len(x) for x in batch_chunks])
+
+        if opts.return_batch_chunks:
+            return (batch_chunks, chunk_count)
+
+        to_pad_count = max(opts.max_chunk_count, chunk_count) - chunk_count
+        if to_pad_count > 0:
+            self.empty_batch_chunks = self.process_texts([""])[0]
+            batch_chunks = [batch_chunks[0] + self.empty_batch_chunks[0] * to_pad_count]
+            chunk_count = max([len(x) for x in batch_chunks])
+
         zs = []
         for i in range(chunk_count):
             batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]

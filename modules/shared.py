@@ -43,7 +43,6 @@ class Options:
 
 opts = Options()
 opts.data['prompt_attention'] = 'A1111 parser'
-opts.data['comma_padding_backtrack'] = None
 opts.data['prompt_mean_norm'] = True
 opts.data["comma_padding_backtrack"] = 20
 opts.data["CLIP_stop_at_last_layers"] = 1
@@ -51,8 +50,13 @@ opts.data['enable_emphasis'] = True
 opts.data['use_old_emphasis_implementation'] = False
 opts.data['disable_nan_check'] = True
 opts.data['pad_cond_uncond'] = False
-opts.data['upcast_sampling'] = sys.platform == "darwin"
+opts.data['upcast_sampling'] = False
 opts.data['upcast_attn'] = not args.dont_upcast_attention
+opts.data['textual_inversion_add_hashes_to_infotext']  = False
+opts.data['encode_count'] = 0
+opts.data['max_chunk_count'] = 0
+opts.data['return_batch_chunks'] = False
+
 
 opts.data['use_CFGDenoiser'] = False
 opts.data['disable_max_denoise'] = False
@@ -63,6 +67,8 @@ opts.data['sdxl_crop_left'] = 0
 opts.data['sdxl_refiner_low_aesthetic_score'] = 2.5
 opts.data['sdxl_refiner_high_aesthetic_score'] = 6.0
 
+sd_model = Options()
+sd_model.cond_stage_model = Options()
 
 cmd_opts = Options()
 

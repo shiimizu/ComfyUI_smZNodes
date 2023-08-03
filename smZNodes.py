@@ -296,7 +296,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
 
     def assign_funcs(mc, fn=None):
-        mc.encode_token_weights_orig = partial(mc.encode_token_weights)
+        mc.encode_token_weights_orig = mc.encode_token_weights
         mc.encode_token_weights = MethodType(partial_method if fn == None else fn, mc)
     def restore_funcs(mc):
         if hasattr(mc, "encode_token_weights_orig"):
@@ -305,7 +305,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     # Get the max chunk_count to pad the tokens on varying clip_g and clip_l lengths.
     # To account for both positive and negative conditionings, opts.max_chunk_count is reset before sampling.
     def encode_token_weights_sdxl(self, token_weight_pairs):
-        if opts.encode_count >=2:
+        if opts.encode_count >= 2:
             opts.max_chunk_count = 0
             opts.encode_count = 0
         token_weight_pairs_g = token_weight_pairs["g"]
@@ -314,10 +314,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
         _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
         _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
         opts.return_batch_chunks = False
-        try:
-            opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
-        except:
-            import pdb;pdb.set_trace()
+        opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
         g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
         l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
 
@@ -353,36 +350,6 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
 
     with Context():
         return clip.encode_from_tokens(tokens, return_pooled)
-
-
-    # ret = None
-    # clip_clone = clip
-    # if type(clip.cond_stage_model) == SDXLClipModel:
-    #     mc.wrapped.clip_l.encode_token_weights_orig = mc.wrapped.clip_l.encode_token_weights
-    #     mc.wrapped.clip_g.encode_token_weights_orig = mc.wrapped.clip_g.encode_token_weights
-    #     try:
-    #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-    #         mc.wrapped.clip_l.encode_token_weights = MethodType(partial_method, mc.clip_l)
-    #         mc.wrapped.clip_g.encode_token_weights = MethodType(partial_method, mc.clip_g)
-    #         ret = clip.encode_from_tokens(tokens, return_pooled)
-    #         mc.wrapped.clip_l.encode_token_weights = mc.wrapped.clip_l.encode_token_weights_orig
-    #         mc.wrapped.clip_g.encode_token_weights = mc.wrapped.clip_g.encode_token_weights_orig
-    #     except Exception as error:
-    #         mc.wrapped.clip_l.encode_token_weights = mc.wrapped.clip_l.encode_token_weights_orig
-    #         mc.wrapped.clip_g.encode_token_weights = mc.wrapped.clip_g.encode_token_weights_orig
-    #         raise error
-    # else:
-    #     mc.wrapped.encode_token_weights_orig = mc.wrapped.encode_token_weights
-    #     try:
-    #         partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
-    #         mc.encode_token_weights = MethodType(partial_method, mc)
-    #         ret = clip.encode_from_tokens(tokens, return_pooled)
-    #         mc.wrapped.encode_token_weights = mc.wrapped.encode_token_weights_orig
-    #     except Exception as error:
-    #         mc.wrapped.encode_token_weights = mc.wrapped.encode_token_weights_orig
-    #         raise error
-
-    # return ret
 
 def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
     '''

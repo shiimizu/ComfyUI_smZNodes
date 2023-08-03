@@ -1,4 +1,4 @@
-import open_clip.tokenizer
+# import open_clip.tokenizer
 import torch
 
 from . import sd_hijack_clip, devices

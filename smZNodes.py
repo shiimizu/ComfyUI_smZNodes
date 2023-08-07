@@ -272,9 +272,10 @@ class Embedding:
         return self.cached_checksum
 
 
-def expand(t1, t2, empty_t, with_zeros=False):
+def expand(t1, t2, empty_t=None, with_zeros=False):
     if t1.shape[1] < t2.shape[1]:
         if with_zeros:
+            if empty_t == None: empty_t = shared.sd_model.cond_stage_model_empty_prompt
             num_repetitions = (t2.shape[1] - t1.shape[1]) // empty_t.shape[1]
             return torch.cat([t1, empty_t.repeat((t1.shape[0], num_repetitions, 1))], axis=1)
         else:
@@ -574,6 +575,8 @@ class CFGNoisePredictor(torch.nn.Module):
         ucond_ = uncond[0][1].get('cond_', None)
         co = cond[0][0]
         unc = uncond[0][0]
+        co = expand(co, unc)
+        unc = expand(unc, unc)
         co.cond = cond_
         unc.cond = ucond_
         image_cond = txt2img_image_conditioning(None, x)

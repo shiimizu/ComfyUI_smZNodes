@@ -283,8 +283,8 @@ def expand(t1, t2, empty_t=None, with_zeros=False):
             return t1.repeat(1, num_repetitions, 1)
     else:
         return t1
-    
-def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=False):
+
+def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=False, with_pooled=None):
     '''
     The function is our rendition of `clip.encode_from_tokens()`.
     It still calls `clip.encode_from_tokens()` but hijacks the
@@ -294,7 +294,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
     Originally from `sd.py`: `encode_from_tokens()`
     '''
     tokens=texts
-    partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi)
+    partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi, with_pooled=with_pooled)
 
     def assign_funcs(mc, fn=None):
         mc.encode_token_weights_orig = mc.encode_token_weights
@@ -311,23 +311,31 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
             opts.encode_count = 0
         token_weight_pairs_g = token_weight_pairs["g"]
         token_weight_pairs_l = token_weight_pairs["l"]
-        opts.return_batch_chunks = True
-        _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
-        _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
-        opts.return_batch_chunks = False
-        opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
-        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
-        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
 
+        # Only pad our initial gen of the schedules
+        if with_pooled == None:
+            opts.return_batch_chunks = True
+            _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
+            _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
+            opts.return_batch_chunks = False
+            opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
+        else:
+            if isinstance(with_pooled['schedules_'], dict): with_pooled['schedules_lg'] = with_pooled['schedules_']
+        if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['g']
+        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
+        if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['l']
+        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
+        g_pooled.cond = {"g": g_pooled.cond, "l": l_pooled.cond }
         with devices.autocast(), torch.no_grad():
-            empty_g = self.clip_g.encode_token_weights([""])[0]
-            empty_l = self.clip_l.encode_token_weights([""])[0]
-            empty = torch.cat([empty_l, empty_g], dim=-1)
-            shared.sd_model.cond_stage_model_empty_prompt_g = empty_g
-            shared.sd_model.cond_stage_model_empty_prompt_l = empty_l
-            shared.sd_model.cond_stage_model_empty_prompt = empty
+            if with_pooled == None:
+                empty_g = self.clip_g.encode_token_weights([""])[0]
+                empty_l = self.clip_l.encode_token_weights([""])[0]
+                empty = torch.cat([empty_l, empty_g], dim=-1)
+                shared.sd_model.cond_stage_model_empty_prompt_g = empty_g
+                shared.sd_model.cond_stage_model_empty_prompt_l = empty_l
+                shared.sd_model.cond_stage_model_empty_prompt = empty
         opts.encode_count += 1
-        return torch.cat([l_out, g_out], dim=-1), g_pooled
+        return (torch.cat([l_out, g_out], dim=-1), g_pooled)
 
     class Context:
         def __init__(self):
@@ -418,9 +426,23 @@ def encode_token_weights_customized(self: SD1ClipModel|FrozenCLIPEmbedderWithCus
 
 # tokenize then encode
 # from prompt_parser.py: get_learned_conditioning()
-def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase, prompts: List[str], steps = 1, return_pooled=True, multi=False):
+def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase, prompts: List[str], steps = 1, return_pooled=True, multi=False, with_pooled=None):
     first_pooled = None
     final_cond = None
+
+    if with_pooled != None:
+        first_pooled = with_pooled['pooled_output']
+        schedules = with_pooled['schedules_']
+        step = with_pooled['step_']
+        conds_list = [[(0, 1.0)]]
+        final_cond = reconstruct_schedules(schedules, step)
+        if type(final_cond) == tuple:
+            conds_list, final_cond = final_cond
+        final_cond.cond = schedules
+        first_pooled.cond = schedules
+        with_pooled['conds_list_'] = conds_list
+        return (final_cond, first_pooled) if return_pooled else final_cond
+
     # rewrite the functions here just to extract pooled
 
     if multi:
@@ -466,16 +488,17 @@ def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase
         learned_conditioning = res
         for indexes in res_indexes:
             res_mc.append([prompt_parser.ComposableScheduledPromptConditioning(learned_conditioning[i], weight) for i, weight in indexes])
-        ret = prompt_parser.MulticondLearnedConditioning(shape=(len(prompts),), batch=res_mc)
-        conds_list, final_cond = prompt_parser.reconstruct_multicond_batch(ret, steps)
+        schedules = prompt_parser.MulticondLearnedConditioning(shape=(len(prompts),), batch=res_mc)
+        conds_list, final_cond = prompt_parser.reconstruct_multicond_batch(schedules, 0)
         # final_cond = final_cond.cpu()
-        final_cond.cond = ret
-        first_pooled.cond = ret # for sdxl
+        final_cond.cond = schedules
+        first_pooled.cond = schedules # for sdxl
     else:
-        final_cond = prompt_parser.reconstruct_cond_batch(res, steps)
+        schedules=res
+        final_cond = prompt_parser.reconstruct_cond_batch(schedules, 0)
         # final_cond = final_cond.cpu()
-        final_cond.cond = res
-        first_pooled.cond = res # for sdxl
+        final_cond.cond = schedules
+        first_pooled.cond = schedules # for sdxl
 
     return (final_cond, first_pooled) if return_pooled else final_cond
 
@@ -594,11 +617,11 @@ def process_conds_comfy(self, positive, negative):
             negative = encode_adm(self.model, negative, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "negative")
         return (positive, negative)
 
-def reconstruct_schedules(step, schedules):
+def reconstruct_schedules(schedules, step):
     create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
     reconstruct_fn = create_reconstruct_fn(schedules)
     return reconstruct_fn(schedules, step)
-    
+
 class CFGNoisePredictor(torch.nn.Module):
     def __init__(self, model, ksampler):
         super().__init__()
@@ -613,49 +636,50 @@ class CFGNoisePredictor(torch.nn.Module):
         self.init_uncond = None
 
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
+        cond[0][1]['step_'] = self.step
+        uncond[0][1]['step_'] = self.step
+        if self.init_cond == None:
+            tmp = cond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
+            tmp[0][1]['encode_fn'] = cond[0][1]['encode_fn']
+            tmp[0][1]['step_'] = self.step
+            self.init_cond = cond = [[tmp[0][0], tmp[0][1] ]]
+        else:
+            cond = self.init_cond
+        if self.init_uncond == None:
+            tmp = uncond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
+            tmp[0][1]['encode_fn'] = uncond[0][1]['encode_fn']
+            tmp[0][1]['step_'] = self.step
+            self.init_uncond = uncond = [[tmp[0][0], tmp[0][1] ]]
+        else:
+            uncond = self.init_uncond
+
+        cond_orig = cond
+        unccond_orig = uncond
+
+        conds_list = [[(0, 1.0)]]
+        positive = cond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_cond[0][1])[0]
+        conds_list = positive[0][1]['conds_list_']
+        negative = uncond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_uncond[0][1])[0]
+        cond = positive
+        uncond = negative
+        cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
+        co = cond[0][0]
+        unc = uncond[0][0]
+        co = expand(co, unc)
+        unc = expand(unc, co)
+
         c_adm = None
         if cond[0][1].get("adm_encoded", None) != None:
             c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
         x.c_adm = c_adm
 
-        if self.init_cond == None:
-            self.init_cond = cond = cond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
-        else:
-            cond = self.init_cond
-        if self.init_uncond == None:
-            self.init_uncond = uncond = uncond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
-        else:
-            uncond = self.init_uncond
-
-        co_pooled = cond[0][1]
-        unc_pooled = uncond[0][1]
-        co_schedules = co_pooled.get('schedules_', None)
-        unc_schedules = unc_pooled.get('schedules_', None)
-        
-
-        conds_list = [[(0, 1.0)]]
-        co_tensor = reconstruct_schedules(self.step, co_schedules)
-        if type(co_tensor) == tuple:
-            conds_list, co_tensor = co_tensor
-        unc_tensor = reconstruct_schedules(self.step, unc_schedules)
-        if type(unc_tensor) == tuple:
-            _, unc_tensor = unc_tensor
-        positive = [[co_tensor, co_pooled]]
-        negative = [[unc_tensor, unc_pooled]]
-        positive, negative = process_conds_comfy(self.ksampler, positive, negative)
-        co = positive[0][0]
-        unc = negative[0][0]
-
-        co = expand(co, unc)
-        uncond = expand(unc, co)
-
-        if co_pooled.get('use_CFGDenoiser', False) or unc_pooled.get('use_CFGDenoiser', False):
+        if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):
             cond = (conds_list, co)
             image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model(x, timestep, cond=cond, uncond=uncond, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
+            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
         else:
-            cond = [[co, co_pooled]]
-            uncond = [[uncond, unc_pooled]]
+            cond = [[co, cond[0][1]]]
+            uncond = [[unc, uncond[0][1]]]
             out = self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
         self.step += 1
         return out

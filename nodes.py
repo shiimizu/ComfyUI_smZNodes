@@ -57,7 +57,7 @@ class smZ_CLIPTextEncode:
         devices.dtype = devices.dtype_unet
         devices.dtype_vae = comfy.model_management.vae_dtype()
 
-        def run(steps=1):
+        def run(steps=0, with_pooled=None):
             opts.prompt_mean_norm = mean_normalization
             opts.use_old_emphasis_implementation = use_old_emphasis_implementation
             opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
@@ -140,7 +140,7 @@ class smZ_CLIPTextEncode:
                     #         uc = prompt_parser.get_learned_conditioning(clip_clone.cond_stage_model, texts, steps)
                     #         cond = prompt_parser.reconstruct_cond_batch(uc, steps)
                     #         cond.cond = uc
-                    _cond, pooled = encode_from_texts(clip_clone, texts, steps=steps, return_pooled=True, multi=multi_conditioning)
+                    _cond, pooled = encode_from_texts(clip_clone, texts, steps=steps, return_pooled=True, multi=multi_conditioning, with_pooled=with_pooled)
                     _cond.cond = pooled.cond
                     cond = cond if cond != None else _cond
                     model_hijack.undo_hijack(clip_clone)
@@ -148,7 +148,7 @@ class smZ_CLIPTextEncode:
                     model_hijack.undo_hijack(clip_clone)
                     raise err
                 pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "schedules_": cond.cond, **sdxl_conds}
-            return ([[cond, pooled ]], )
+            return ([[cond, pooled if with_pooled == None else with_pooled]], )
 
         result = run()
         result[0][0][1]['encode_fn'] = run

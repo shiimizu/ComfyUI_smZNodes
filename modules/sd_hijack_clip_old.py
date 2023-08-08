@@ -72,6 +72,11 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
 def forward_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, texts):
     batch_multipliers, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, _token_count = process_text_old(self, texts)
 
+    chunk_count = max([len(x) for x in remade_batch_tokens])
+
+    if shared.opts.return_batch_chunks:
+        return (remade_batch_tokens, chunk_count)
+
     self.hijack.comments += hijack_comments
 
     if len(used_custom_terms) > 0:

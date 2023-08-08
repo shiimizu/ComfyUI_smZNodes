@@ -50,6 +50,25 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         self.id_start = self.wrapped.tokenizer.bos_token_id
         self.id_end = self.wrapped.tokenizer.eos_token_id
         self.id_pad = 0
+        # Below is safe to do since ComfyUI uses the same CLIP model
+        # for Open Clip instead of an actual Open Clip model?
+        self.token_mults = {}
+        vocab = self.tokenizer.get_vocab()
+        self.comma_token = vocab.get(',</w>', None)
+        tokens_with_parens = [(k, v) for k, v in vocab.items() if '(' in k or ')' in k or '[' in k or ']' in k]
+        for text, ident in tokens_with_parens:
+            mult = 1.0
+            for c in text:
+                if c == '[':
+                    mult /= 1.1
+                if c == ']':
+                    mult *= 1.1
+                if c == '(':
+                    mult *= 1.1
+                if c == ')':
+                    mult /= 1.1
+            if mult != 1.0:
+                self.token_mults[ident] = mult
 
     def tokenize_line(self, line):
         parse_and_register_embeddings(self, line)
@@ -84,7 +103,7 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         return (z, pooled) if return_pooled else z
 
     def tokenize(self, texts):
-        assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
+        # assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
         return tokenized
 

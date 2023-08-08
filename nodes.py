@@ -118,6 +118,11 @@ class smZ_CLIPTextEncode:
                 return ([[cond, pooled ]], )
             else:
                 texts = [text]
+                # Because of prompt editing, we need the total number of steps
+                # So this function will be called back at the sampling stage
+                # if steps == 0:
+                #     texts = ['']
+                #     steps = 1
                 create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
                 texts = create_prompts(texts)
                 if type(clip.cond_stage_model).__name__ == "SDXLClipModel":

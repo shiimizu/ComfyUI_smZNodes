@@ -49,15 +49,7 @@ class smZ_CLIPTextEncode:
                crop_h, target_width, target_height, text_g, text_l):
         devices.device = clip.patcher.load_device
         shared.device = devices.device
-        # devices.device = comfy.model_management.get_torch_device()
-        opts.data['prompt_mean_norm'] = mean_normalization
-        opts.data['use_old_emphasis_implementation'] = use_old_emphasis_implementation
-        opts.data['CLIP_stop_at_last_layers'] = abs(clip.layer_idx or 1)
         is_sdxl = type(clip.cond_stage_model) == SDXLClipModel
-        if is_sdxl:
-            # Prevents tensor shape mismatch
-            shared.cmd_opts.always_batch_cond_uncond = True
-            shared.batch_cond_uncond = True
 
         dtype = torch.float16 if comfy.model_management.should_use_fp16(device=devices.device) else torch.float32
         devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else (_dtype if (_dtype:=clip.patcher.model_dtype() != None) else dtype)
@@ -65,7 +57,15 @@ class smZ_CLIPTextEncode:
         devices.dtype = devices.dtype_unet
         devices.dtype_vae = comfy.model_management.vae_dtype()
 
-        def run():
+        def run(steps=1):
+            opts.prompt_mean_norm = mean_normalization
+            opts.use_old_emphasis_implementation = use_old_emphasis_implementation
+            opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
+            if is_sdxl:
+                # Prevents tensor shape mismatch
+                shared.cmd_opts.always_batch_cond_uncond = True
+                shared.batch_cond_uncond = True
+                
             parser_d = {"full": "Full parser",
                  "compel": "Compel parser",
                  "A1111": "A1111 parser",
@@ -129,7 +129,6 @@ class smZ_CLIPTextEncode:
                 clip_clone = clip.clone()
                 model_hijack.hijack(clip_clone)
                 try:
-                    steps = 1
                     cond = None
                     # from A1111's processing.py and sd_samplers_kdiffusion.py
                     # if not is_sdxl:
@@ -148,10 +147,11 @@ class smZ_CLIPTextEncode:
                 except Exception as err:
                     model_hijack.undo_hijack(clip_clone)
                     raise err
-                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "cond_": cond.cond, **sdxl_conds}
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, "schedules_": cond.cond, **sdxl_conds}
             return ([[cond, pooled ]], )
 
         result = run()
+        result[0][0][1]['encode_fn'] = run
         return result
 
 # A dictionary that contains all nodes you want to export with their names

@@ -558,33 +558,110 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
     #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
 
+def process_conds_comfy(self, positive, negative):
+        from comfy.sample import broadcast_cond
+        from comfy.samplers import (resolve_cond_masks, calculate_start_end_timesteps,
+                                            create_cond_with_same_area_if_none, pre_run_control,
+                                            apply_empty_x_to_equal_area, encode_adm)
+        noise = self.model_k.noise
+        device = self.device
+
+        positive = broadcast_cond(positive, noise.shape[0], device)
+        negative = broadcast_cond(negative, noise.shape[0], device)
+
+        positive = positive[:]
+        negative = negative[:]
+
+        resolve_cond_masks(positive, noise.shape[2], noise.shape[3], self.device)
+        resolve_cond_masks(negative, noise.shape[2], noise.shape[3], self.device)
+
+        calculate_start_end_timesteps(self.model_wrap, negative)
+        calculate_start_end_timesteps(self.model_wrap, positive)
+
+        #make sure each cond area has an opposite one with the same area
+        for c in positive:
+            create_cond_with_same_area_if_none(negative, c)
+        for c in negative:
+            create_cond_with_same_area_if_none(positive, c)
+
+        pre_run_control(self.model_wrap, negative + positive)
+
+        apply_empty_x_to_equal_area(list(filter(lambda c: c[1].get('control_apply_to_uncond', False) == True, positive)), negative, 'control', lambda cond_cnets, x: cond_cnets[x])
+        apply_empty_x_to_equal_area(positive, negative, 'gligen', lambda cond_cnets, x: cond_cnets[x])
+
+        if self.model.is_adm():
+            positive = encode_adm(self.model, positive, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "positive")
+            negative = encode_adm(self.model, negative, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "negative")
+        return (positive, negative)
+
+def reconstruct_schedules(step, schedules):
+    create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
+    reconstruct_fn = create_reconstruct_fn(schedules)
+    return reconstruct_fn(schedules, step)
+    
 class CFGNoisePredictor(torch.nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, ksampler):
         super().__init__()
+        self.ksampler = ksampler
+        self.step = 0
+        self.orig = comfy.samplers.CFGNoisePredictor(model)
         self.inner_model = CFGDenoiser(model.apply_model)
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
-        self.inner_model.device = comfy.model_management.get_torch_device()
+        self.inner_model.device = self.ksampler.device
         self.alphas_cumprod = model.alphas_cumprod
+        self.init_cond = None
+        self.init_uncond = None
 
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
         c_adm = None
         if cond[0][1].get("adm_encoded", None) != None:
             c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
         x.c_adm = c_adm
-        cond_ = cond[0][1].get('cond_', None)
-        ucond_ = uncond[0][1].get('cond_', None)
-        co = cond[0][0]
-        unc = uncond[0][0]
+
+        if self.init_cond == None:
+            self.init_cond = cond = cond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
+        else:
+            cond = self.init_cond
+        if self.init_uncond == None:
+            self.init_uncond = uncond = uncond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
+        else:
+            uncond = self.init_uncond
+
+        co_pooled = cond[0][1]
+        unc_pooled = uncond[0][1]
+        co_schedules = co_pooled.get('schedules_', None)
+        unc_schedules = unc_pooled.get('schedules_', None)
+        
+
+        conds_list = [[(0, 1.0)]]
+        co_tensor = reconstruct_schedules(self.step, co_schedules)
+        if type(co_tensor) == tuple:
+            conds_list, co_tensor = co_tensor
+        unc_tensor = reconstruct_schedules(self.step, unc_schedules)
+        if type(unc_tensor) == tuple:
+            _, unc_tensor = unc_tensor
+        positive = [[co_tensor, co_pooled]]
+        negative = [[unc_tensor, unc_pooled]]
+        positive, negative = process_conds_comfy(self.ksampler, positive, negative)
+        co = positive[0][0]
+        unc = negative[0][0]
+
         co = expand(co, unc)
-        unc = expand(unc, unc)
-        co.cond = cond_
-        unc.cond = ucond_
-        image_cond = txt2img_image_conditioning(None, x)
-        out = self.inner_model(x, timestep, cond=co, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
+        uncond = expand(unc, co)
+
+        if co_pooled.get('use_CFGDenoiser', False) or unc_pooled.get('use_CFGDenoiser', False):
+            cond = (conds_list, co)
+            image_cond = txt2img_image_conditioning(None, x)
+            out = self.inner_model(x, timestep, cond=cond, uncond=uncond, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
+        else:
+            cond = [[co, co_pooled]]
+            uncond = [[uncond, unc_pooled]]
+            out = self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
+        self.step += 1
         return out
 
 def set_model_k(self: KSampler):
-    self.model_denoise = CFGNoisePredictor(self.model) # main change
+    self.model_denoise = CFGNoisePredictor(self.model, self) # main change
     if ((getattr(self.model, "parameterization", "") == "v") or
         (getattr(self.model, "model_type", -1) == model_base.ModelType.V_PREDICTION)):
         self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)

@@ -52,7 +52,7 @@ Image slider links:
 |`use_CFGDenoiser`|An experimental option to use `stable-diffusion-webui`'s denoiser. It may not work as expected with inpainting or UnCLIP models but it allows you to get _identical_ images _regardless_ of the prompt. The denoiser will be used for every sampler using the conditioning if it is set to `true` on either one of your positive or negative nodes. To turn it off, set it to `false` for both nodes. |
 
 > **Note**  
-> You can right click the node to show/hide some of the widgets. E.g. the `show_SDXL` option.
+> You can right click the node to show/hide some of the widgets. E.g. the `with_SDXL` option.
 
 <br>
 
@@ -69,7 +69,7 @@ Image slider links:
 > Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
 > **Warning**  
-> Does not support [prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing).
+> Hypernetowork syntax (`<lora:name:1.0>`) is not suppprted and textual inversion embeddings use ComfyUI's syntax: `(embedding:name:1.0)`
 
 ## Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion. Or if you insist on using the GPU, try using the KSampler GPU node. 

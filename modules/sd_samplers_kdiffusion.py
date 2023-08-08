@@ -78,17 +78,7 @@ class CFGDenoiser(torch.nn.Module):
         # is_edit_model = (shared.sd_model is not None) and hasattr(shared.sd_model, 'cond_stage_key') and (shared.sd_model.cond_stage_key == "edit") and (self.image_cfg_scale is not None) and (self.image_cfg_scale != 1.0)
         is_edit_model = False
 
-        conds_list=[[(0, 1.0)]]
-        tensor = cond
-        # if ccc:=getattr(cond, "cond", None):
-        #     conds_list, tensor = prompt_parser.reconstruct_multicond_batch(ccc, self.step)
-        # else:
-        #     print("[smZNodes] WARNING: cond has no attribute `cond`")
-        #     tensor = cond
-        # if uccc:=getattr(uncond, "cond", None):
-        #     uncond = prompt_parser.reconstruct_cond_batch(uccc, self.step)
-        # else:
-        #     print("[smZNodes] WARNING: uncond has no attribute `cond`")
+        conds_list, tensor = cond
         assert not is_edit_model or all(len(conds) == 1 for conds in conds_list), "AND is not supported for InstructPix2Pix checkpoint (unless using Image CFG scale = 1.0)"
 
         batch_size = len(conds_list)

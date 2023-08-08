@@ -76,16 +76,12 @@ add_sample_dpmpp_2m_alt()
 
 from comfy.samplers import KSampler
 injected_code = """
-            try:
-                if positive[0][1].get('from_smZ', None) or negative[0][1].get('from_smZ', None):
-                    from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
-                    if smZ_opts.disable_max_denoise:
-                        max_denoise = False
-                    if positive[0][1].get('use_CFGDenoiser', False) or negative[0][1].get('use_CFGDenoiser', False):
-                        from ComfyUI_smZNodes.smZNodes import set_model_k
-                        set_model_k(self)
-            except Exception as err:
-                raise err
+            if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
+                from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
+                if smZ_opts.disable_max_denoise:
+                    max_denoise = False
+                from ComfyUI_smZNodes.smZNodes import set_model_k
+                set_model_k(self)
 """
 modified_function = inject_code(KSampler.sample, target_line='extra_args["denoise_mask"] = denoise_mask', code_to_insert=injected_code)
 KSampler.sample = modified_function

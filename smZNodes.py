@@ -660,18 +660,17 @@ class CFGNoisePredictor(torch.nn.Module):
         if self.init_cond == None:
             tmp = cond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
             tmp[0][1]['encode_fn'] = cond[0][1]['encode_fn']
-            tmp[0][1]['step_'] = self.step
             self.init_cond = cond = [[tmp[0][0], tmp[0][1] ]]
         else:
             cond = self.init_cond
         if self.init_uncond == None:
             tmp = uncond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
             tmp[0][1]['encode_fn'] = uncond[0][1]['encode_fn']
-            tmp[0][1]['step_'] = self.step
             self.init_uncond = uncond = [[tmp[0][0], tmp[0][1] ]]
         else:
             uncond = self.init_uncond
-
+        self.init_cond[0][1]['step_'] = cond[0][1]['step_'] = self.step
+        self.init_uncond[0][1]['step_'] = uncond[0][1]['step_'] = self.step
         cond_orig = cond
         unccond_orig = uncond
 

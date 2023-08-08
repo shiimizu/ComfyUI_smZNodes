@@ -10,7 +10,7 @@ class EmbeddingDatabase:
     def register_embedding(self, embedding, model):
         self.word_embeddings[embedding.name] = embedding
 
-        ids = model.cond_stage_model.tokenize([embedding.name])[0]
+        ids = model.tokenize([embedding.name])[0]
 
         first_id = ids[0]
         if first_id not in self.ids_lookup:

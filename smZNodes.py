@@ -207,7 +207,7 @@ def parse_and_register_embeddings(self, text: str, return_word_ids=False):
                     print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                 else:
                     embed = embed.to(device=devices.device)
-                    self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self.hijack)
+                    self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self)
                     if len(embed.shape) == 1:
                         # tokens.append([(embed, weight)])
                         tmp += [(embed, weight)]

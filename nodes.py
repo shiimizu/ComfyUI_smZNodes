@@ -95,26 +95,49 @@ class smZ_CLIPTextEncode:
                     return CLIPTextEncode().encode(clip, text)
             elif parser == "comfy++":
                 tokens = clip.tokenize(text)
-                if is_sdxl:
-                    raise NotImplementedError
-                clip_clone = clip.clone()
-                model_hijack.hijack(clip_clone)
-                try:
-                    zs = []
-                    for batch_chunk in tokens:
-                        tokens_ = [x[0] for x in batch_chunk]
-                        multipliers = [x[1] for x in batch_chunk]
-                        z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
-                        zs.append(z)
-                    zcond = torch.hstack(zs)
-                    model_hijack.undo_hijack(clip_clone)
-                except Exception as err:
-                    model_hijack.undo_hijack(clip_clone)
-                    raise err
 
-                cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
-                cond=zcond
-                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser}
+                def encode_toks(__tokens, clip_type="_clip_"):
+                    clip_clone = clip.clone()
+                    model_hijack.hijack(clip_clone)
+                    try:
+                        zs = []
+                        first_pooled = None
+                        for batch_chunk in __tokens:
+                            tokens_ = [x[0] for x in batch_chunk]
+                            multipliers = [x[1] for x in batch_chunk]
+                            z = getattr(model_hijack.cond_stage_model, clip_type, model_hijack.cond_stage_model).process_tokens([tokens_], [multipliers])
+                            if first_pooled == None:
+                                first_pooled = z.pooled
+                            zs.append(z)
+                        zcond = torch.hstack(zs)
+                        zcond.pooled = first_pooled
+                        model_hijack.undo_hijack(clip_clone)
+                    except Exception as err:
+                        model_hijack.undo_hijack(clip_clone)
+                        raise err
+                    return zcond
+                
+                def encode_token_weights_custom(toks):
+                    if is_sdxl and isinstance(toks, dict):
+                        tok_g = toks['g']
+                        tok_l = toks['l']
+                        g_out = encode_toks(tok_g, "clip_g")
+                        l_out = encode_toks(tok_l, "clip_l")
+                        cond = torch.cat([l_out, g_out], dim=-1)
+                        pooled = g_out.pooled
+                    else:
+                        cond = encode_toks(tokens)
+                        pooled = cond.pooled
+                    return (cond, pooled)
+                
+                clip_clone = clip.clone()
+                clip_clone.cond_stage_model.encode_token_weights_orig = clip_clone.cond_stage_model.encode_token_weights
+                clip_clone.cond_stage_model.encode_token_weights = encode_token_weights_custom
+                cond, pooled = clip_clone.encode_from_tokens(tokens, return_pooled=True)
+                clip_clone.cond_stage_model.encode_token_weights = clip_clone.cond_stage_model.encode_token_weights_orig
+                # cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
+                # cond=zcond
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_conds}
                 return ([[cond, pooled ]], )
             else:
                 texts = [text]

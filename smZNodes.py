@@ -139,11 +139,15 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
 
         Originally from `sd1_clip.py`: `encode()` -> `forward()`
         '''
-        # tokens_bak = tokens
-        if isinstance(tokens, torch.Tensor):
-            tokens = tokens.tolist()
-        z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
-        # z = self.encode_with_transformers__(tokens_bak)
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
+        except:
+            z, pooled = self.wrapped(tokens_orig)
+
+            # z = self.encode_with_transformers__(tokens_bak)
         if z.device != devices.device:
             z = z.to(device=devices.device)
         # if z.dtype != devices.dtype:
@@ -340,11 +344,15 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
             opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
         else:
             if isinstance(with_pooled['schedules_'], dict): with_pooled['schedules_lg'] = with_pooled['schedules_']
+
         if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['g']
         g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
+
         if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['l']
         l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
+
         g_pooled.cond = {"g": g_pooled.cond, "l": l_pooled.cond }
+
         with devices.autocast(), torch.no_grad():
             if with_pooled == None:
                 empty_g = self.clip_g.encode_token_weights([""])[0]
@@ -389,14 +397,28 @@ def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False)
     Originally from `sd.py`: `encode_from_tokens()`
     '''
     ret = None
-    encode_token_weights_backup = clip.cond_stage_model.encode_token_weights
-    try:
-        clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
-        ret = clip.encode_from_tokens(tokens, return_pooled)
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-    except Exception as error:
-        clip.cond_stage_model.encode_token_weights = encode_token_weights_backup
-        raise error
+    if type(clip.cond_stage_model) == SDXLClipModel:
+        encode_token_weights_orig_g = clip.cond_stage_model.clip_g.encode_token_weights
+        encode_token_weights_orig_l = clip.cond_stage_model.clip_l.encode_token_weights
+        try:
+            clip.cond_stage_model.clip_g.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model.clip_g)
+            clip.cond_stage_model.clip_l.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model.clip_l)
+            ret = clip.encode_from_tokens(tokens, return_pooled)
+            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_orig_g
+            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_orig_l
+        except Exception as error:
+            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_orig_g
+            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_orig_l
+            raise error
+    else:
+        encode_token_weights_orig = clip.cond_stage_model.encode_token_weights
+        try:
+            clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
+            ret = clip.encode_from_tokens(tokens, return_pooled)
+            clip.cond_stage_model.encode_token_weights = encode_token_weights_orig
+        except Exception as error:
+            clip.cond_stage_model.encode_token_weights = encode_token_weights_orig
+            raise error
 
     return ret
 
@@ -674,9 +696,8 @@ class CFGNoisePredictor(torch.nn.Module):
         cond_orig = cond
         unccond_orig = uncond
 
-        conds_list = [[(0, 1.0)]]
         positive = cond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_cond[0][1])[0]
-        conds_list = positive[0][1]['conds_list_']
+        conds_list = positive[0][1].get('conds_list_', [[(0, 1.0)]])
         negative = uncond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_uncond[0][1])[0]
         cond = positive
         uncond = negative

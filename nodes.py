@@ -47,9 +47,10 @@ class smZ_CLIPTextEncode:
                multi_conditioning, use_old_emphasis_implementation,
                use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
                crop_h, target_width, target_height, text_g, text_l):
+        params = locals()
         devices.device = clip.patcher.load_device
         shared.device = devices.device
-        is_sdxl = type(clip.cond_stage_model) == SDXLClipModel
+        is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
 
         dtype = torch.float16 if comfy.model_management.should_use_fp16(device=devices.device) else torch.float32
         devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else (_dtype if (_dtype:=clip.patcher.model_dtype() != None) else dtype)
@@ -76,7 +77,7 @@ class smZ_CLIPTextEncode:
 
             if parser != "comfy":
                 opts.disable_max_denoise = True
-                opts.use_CFGDenoiser = use_CFGDenoiser
+                opts.use_CFGDenoiser = use_CFGDenoiser # unused
 
             sdxl_conds = {}
             if with_SDXL and is_sdxl:
@@ -96,48 +97,53 @@ class smZ_CLIPTextEncode:
             elif parser == "comfy++":
                 tokens = clip.tokenize(text)
 
-                def encode_toks(__tokens, clip_type="_clip_"):
-                    clip_clone = clip.clone()
-                    model_hijack.hijack(clip_clone)
-                    try:
-                        zs = []
-                        first_pooled = None
-                        for batch_chunk in __tokens:
-                            tokens_ = [x[0] for x in batch_chunk]
-                            multipliers = [x[1] for x in batch_chunk]
-                            z = getattr(model_hijack.cond_stage_model, clip_type, model_hijack.cond_stage_model).process_tokens([tokens_], [multipliers])
-                            if first_pooled == None:
-                                first_pooled = z.pooled
-                            zs.append(z)
-                        zcond = torch.hstack(zs)
-                        zcond.pooled = first_pooled
-                        model_hijack.undo_hijack(clip_clone)
-                    except Exception as err:
-                        model_hijack.undo_hijack(clip_clone)
-                        raise err
+                def encode_toks(__tokens, m, clip_type="_clip_"):
+                    zs = []
+                    first_pooled = None
+                    for batch_chunk in __tokens:
+                        tokens_ = [x[0] for x in batch_chunk]
+                        multipliers = [x[1] for x in batch_chunk]
+                        z = getattr(m, clip_type, m).process_tokens([tokens_], [multipliers])
+                        if first_pooled == None:
+                            first_pooled = z.pooled
+                        zs.append(z)
+                    zcond = torch.hstack(zs)
+                    zcond.pooled = first_pooled
                     return zcond
                 
-                def encode_token_weights_custom(toks):
+                def encode_token_weights_custom(toks,m):
                     if is_sdxl and isinstance(toks, dict):
                         tok_g = toks['g']
                         tok_l = toks['l']
-                        g_out = encode_toks(tok_g, "clip_g")
-                        l_out = encode_toks(tok_l, "clip_l")
+                        g_out = encode_toks(tok_g, m, "clip_g")
+                        l_out = encode_toks(tok_l, m, "clip_l")
                         cond = torch.cat([l_out, g_out], dim=-1)
                         pooled = g_out.pooled
                     else:
-                        cond = encode_toks(tokens)
+                        cond = encode_toks(toks,m)
                         pooled = cond.pooled
                     return (cond, pooled)
                 
                 clip_clone = clip.clone()
-                clip_clone.cond_stage_model.encode_token_weights_orig = clip_clone.cond_stage_model.encode_token_weights
-                clip_clone.cond_stage_model.encode_token_weights = encode_token_weights_custom
-                cond, pooled = clip_clone.encode_from_tokens(tokens, return_pooled=True)
-                clip_clone.cond_stage_model.encode_token_weights = clip_clone.cond_stage_model.encode_token_weights_orig
-                # cond, pooled = encode_from_tokens_with_custom_mean(clip, tokens, return_pooled=True)
-                # cond=zcond
-                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_conds}
+                model_hijack.hijack(clip_clone)
+                try:
+                    if clip_clone.layer_idx is not None:
+                        clip_clone.cond_stage_model.clip_layer(clip_clone.layer_idx)
+                    else:
+                        clip_clone.cond_stage_model.reset_clip_layer()
+                    comfy.model_management.load_model_gpu(clip_clone.patcher)
+                    cond, pooled = encode_token_weights_custom(tokens, model_hijack.cond_stage_model)
+                    model_hijack.undo_hijack(clip_clone)
+                except Exception as err:
+                    model_hijack.undo_hijack(clip_clone)
+                    raise err
+
+                # clip_clone = clip.clone()
+                # clip_clone.cond_stage_model.encode_token_weights_orig = clip_clone.cond_stage_model.encode_token_weights
+                # clip_clone.cond_stage_model.encode_token_weights = encode_token_weights_custom
+                # cond, pooled = clip_clone.encode_from_tokens(tokens, return_pooled=True)
+                # clip_clone.cond_stage_model.encode_token_weights = clip_clone.cond_stage_model.encode_token_weights_orig
+                pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": False, **sdxl_conds}
                 return ([[cond, pooled ]], )
             else:
                 texts = [text]
@@ -148,7 +154,7 @@ class smZ_CLIPTextEncode:
                 #     steps = 1
                 create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
                 texts = create_prompts(texts)
-                if type(clip.cond_stage_model).__name__ == "SDXLClipModel":
+                if is_sdxl:
                     if with_SDXL:
                         texts = {"g": create_prompts([text_g]), "l": create_prompts([text_l])}
                     else:
@@ -180,6 +186,7 @@ class smZ_CLIPTextEncode:
 
         result = run()
         result[0][0][1]['encode_fn'] = run
+        result[0][0][1]['params'] = params
         return result
 
 # A dictionary that contains all nodes you want to export with their names

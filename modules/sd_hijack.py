@@ -119,11 +119,9 @@ class StableDiffusionModelHijack:
                 mc = getattr(m.cond_stage_model, clip_type)
                 mc.clip_layer = getattr(mc.wrapped, "clip_layer", None)
                 mc.reset_clip_layer = getattr(mc.wrapped, "reset_clip_layer", None)
-                # Doesn't do anything
-                m.cond_stage_model.cond_stage_forward = "forward"
-                mc.get_learned_conditioning = MethodType(get_learned_conditioning, mc)
             assign_funcs("clip_l")
             assign_funcs("clip_g")
+            m.cond_stage_forward = "encode_token_weights"
         else:
             model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
             model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
@@ -139,7 +137,7 @@ class StableDiffusionModelHijack:
             # use our `m.cond_stage_model.forward()` which runs `torch.nn.Module`'s `forward()` function
             # from `FrozenCLIPEmbedderWithCustomWordsBase`
             m.cond_stage_forward = "forward"
-            m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
+        m.cond_stage_model.get_learned_conditioning = MethodType(get_learned_conditioning, m)
         
         self.cond_stage_model = m.cond_stage_model
         self.clip = m.cond_stage_model

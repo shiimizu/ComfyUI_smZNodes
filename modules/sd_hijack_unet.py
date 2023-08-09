@@ -96,8 +96,7 @@ def apply_model22(self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None,
                 cond[y] = cond[y].to(devices.dtype_unet) if isinstance(cond[y], torch.Tensor) else cond[y]
 
     with devices.autocast():
-        out = self.apply_model_orig(x_noisy, t, c_concat, cond, c_adm, control, transformer_options)
-        return out.to(devices.dtype_unet)
+        return self.apply_model_orig(x_noisy, t, c_concat, cond, c_adm, control, transformer_options)
 
 BaseModel.apply_model = apply_model22
 

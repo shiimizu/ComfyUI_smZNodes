@@ -23,6 +23,7 @@ import functools
 import tempfile
 import importlib
 import sys
+import itertools
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -144,7 +145,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
             if isinstance(tokens, torch.Tensor):
                 tokens = tokens.tolist()
             z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
-        except:
+        except Exception as e:
             z, pooled = self.wrapped(tokens_orig)
 
             # z = self.encode_with_transformers__(tokens_bak)
@@ -307,7 +308,7 @@ def expand(t1, t2, empty_t=None, with_zeros=False):
     else:
         return t1
 
-def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=False, with_pooled=None):
+def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False, with_pooled=None):
     '''
     The function is our rendition of `clip.encode_from_tokens()`.
     It still calls `clip.encode_from_tokens()` but hijacks the
@@ -366,7 +367,7 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
 
     class Context:
         def __init__(self):
-            if type(clip.cond_stage_model) == SDXLClipModel:
+            if "SDXL" in type(clip.cond_stage_model).__name__:
                 assign_funcs(clip.cond_stage_model.clip_l)
                 assign_funcs(clip.cond_stage_model.clip_g)
                 assign_funcs(clip.cond_stage_model, encode_token_weights_sdxl)
@@ -377,15 +378,29 @@ def encode_from_texts(clip: CLIP, texts, steps = 1, return_pooled=False, multi=F
             return self
 
         def __exit__(self, *args, **kwargs):
-            if type(clip.cond_stage_model) == SDXLClipModel:
+            if "SDXL" in type(clip.cond_stage_model).__name__:
                 restore_funcs(clip.cond_stage_model.clip_l)
                 restore_funcs(clip.cond_stage_model.clip_g)
                 restore_funcs(clip.cond_stage_model)
             else:
                 restore_funcs(clip.cond_stage_model)
 
+    def encode_from_tokens(self, tokens, return_pooled=False):
+        if self.layer_idx is not None:
+            self.cond_stage_model.clip_layer(self.layer_idx)
+        else:
+            self.cond_stage_model.reset_clip_layer()
+
+        # Only call this function on init
+        if steps == 0:
+            model_management.load_model_gpu(self.patcher)
+        cond, pooled = self.cond_stage_model.encode_token_weights(tokens)
+        if return_pooled:
+            return cond, pooled
+        return cond
     with Context():
-        return clip.encode_from_tokens(tokens, return_pooled)
+        return encode_from_tokens(clip, tokens, return_pooled)
+        # return clip.encode_from_tokens(tokens, return_pooled)
 
 def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
     '''
@@ -397,7 +412,7 @@ def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False)
     Originally from `sd.py`: `encode_from_tokens()`
     '''
     ret = None
-    if type(clip.cond_stage_model) == SDXLClipModel:
+    if "SDXL" in type(clip.cond_stage_model).__name__:
         encode_token_weights_orig_g = clip.cond_stage_model.clip_g.encode_token_weights
         encode_token_weights_orig_l = clip.cond_stage_model.clip_l.encode_token_weights
         try:
@@ -673,34 +688,41 @@ class CFGNoisePredictor(torch.nn.Module):
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
         self.inner_model.device = self.ksampler.device
         self.alphas_cumprod = model.alphas_cumprod
-        self.init_cond = None
-        self.init_uncond = None
+        self.cond_orig = None
+        self.uncond_orig = None
 
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        cond[0][1]['step_'] = self.step
-        uncond[0][1]['step_'] = self.step
-        if self.init_cond == None:
-            tmp = cond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
-            tmp[0][1]['encode_fn'] = cond[0][1]['encode_fn']
-            self.init_cond = cond = [[tmp[0][0], tmp[0][1] ]]
-        else:
-            cond = self.init_cond
-        if self.init_uncond == None:
-            tmp = uncond[0][1]['encode_fn'](steps=self.ksampler.steps)[0]
-            tmp[0][1]['encode_fn'] = uncond[0][1]['encode_fn']
-            self.init_uncond = uncond = [[tmp[0][0], tmp[0][1] ]]
-        else:
-            uncond = self.init_uncond
-        self.init_cond[0][1]['step_'] = cond[0][1]['step_'] = self.step
-        self.init_uncond[0][1]['step_'] = uncond[0][1]['step_'] = self.step
-        cond_orig = cond
-        unccond_orig = uncond
+        if self.cond_orig is None:
+            self.cond_orig = cond
+        if self.uncond_orig is None:
+            self.uncond_orig = uncond
+        conds_list = [[(0, 1.0)]]
+        co = cond[0][0]
+        unc = uncond[0][0]
+        self.cond_orig[0][1]['step_'] = self.step
+        self.uncond_orig[0][1]['step_'] = self.step
 
-        positive = cond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_cond[0][1])[0]
-        conds_list = positive[0][1].get('conds_list_', [[(0, 1.0)]])
-        negative = uncond[0][1]['encode_fn'](steps=self.ksampler.steps, with_pooled=self.init_uncond[0][1])[0]
-        cond = positive
-        uncond = negative
+        if self.step == 0:
+            encode_fn = self.cond_orig[0][1]['encode_fn']
+            cond = encode_fn(self.ksampler.steps)[0]
+            cond[0][1]['step_'] = self.step
+            cond[0][1]['encode_fn'] = self.cond_orig[0][1]['encode_fn']
+            self.init_cond = cond
+
+            encode_fn = self.uncond_orig[0][1]['encode_fn']
+            uncond = encode_fn(self.ksampler.steps)[0]
+            uncond[0][1]['encode_fn'] = self.uncond_orig[0][1]['encode_fn']
+            uncond[0][1]['step_'] = self.step
+            self.init_uncond = uncond
+        else:
+            encode_fn = self.init_cond[0][1]['encode_fn']
+            cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
+            cond[0][1]['step_'] = self.step
+
+            encode_fn = self.init_uncond[0][1]['encode_fn']
+            uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
+            uncond[0][1]['step_'] = self.step
+
         cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
         co = cond[0][0]
         unc = uncond[0][0]

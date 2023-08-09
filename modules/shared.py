@@ -58,8 +58,8 @@ opts.data['max_chunk_count'] = 0
 opts.data['return_batch_chunks'] = False
 
 
-opts.data['use_CFGDenoiser'] = True
-opts.data['disable_max_denoise'] = False
+opts.data['use_CFGDenoiser'] = False
+opts.data['disable_max_denoise'] = True
 
 
 opts.data['sdxl_crop_top'] = 0

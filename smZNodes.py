@@ -9,7 +9,7 @@ from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords, FrozenCLIPEmbedderWithCustomWordsBase
 from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
-from comfy.sdxl_clip import SDXLTokenizer, SDXLClipModel, SDXLClipGTokenizer, SDXLClipG
+from comfy.sdxl_clip import SDXLClipGTokenizer, SDXLClipG
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_base, model_management
@@ -368,9 +368,12 @@ def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False
     class Context:
         def __init__(self):
             if "SDXL" in type(clip.cond_stage_model).__name__:
-                assign_funcs(clip.cond_stage_model.clip_l)
-                assign_funcs(clip.cond_stage_model.clip_g)
-                assign_funcs(clip.cond_stage_model, encode_token_weights_sdxl)
+                if hasattr(clip.cond_stage_model, "clip_l"):
+                    assign_funcs(clip.cond_stage_model.clip_l)
+                if hasattr(clip.cond_stage_model, "clip_g"):
+                    assign_funcs(clip.cond_stage_model.clip_g)
+                if hasattr(clip.cond_stage_model, "clip_l") and hasattr(clip.cond_stage_model, "clip_g"):
+                    assign_funcs(clip.cond_stage_model, encode_token_weights_sdxl)
             else:
                 assign_funcs(clip.cond_stage_model)
 
@@ -379,9 +382,12 @@ def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False
 
         def __exit__(self, *args, **kwargs):
             if "SDXL" in type(clip.cond_stage_model).__name__:
-                restore_funcs(clip.cond_stage_model.clip_l)
-                restore_funcs(clip.cond_stage_model.clip_g)
-                restore_funcs(clip.cond_stage_model)
+                if hasattr(clip.cond_stage_model, "clip_l"):
+                    restore_funcs(clip.cond_stage_model.clip_l)
+                if hasattr(clip.cond_stage_model, "clip_g"):
+                    restore_funcs(clip.cond_stage_model.clip_g)
+                if hasattr(clip.cond_stage_model, "clip_l") and hasattr(clip.cond_stage_model, "clip_g"):
+                    restore_funcs(clip.cond_stage_model)
             else:
                 restore_funcs(clip.cond_stage_model)
 

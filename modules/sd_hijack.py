@@ -1,10 +1,8 @@
 import torch
 import comfy
-import copy
 from torch.nn.functional import silu
 from types import MethodType
 from comfy.sd import CLIP
-from comfy.sdxl_clip import SDXLClipModel
 from comfy import ldm
 from . import devices, shared, sd_hijack_unet, sd_hijack_optimizations, script_callbacks, errors
 from .textual_inversion import textual_inversion
@@ -105,8 +103,9 @@ class StableDiffusionModelHijack:
 
     def hijack(self, m: CLIP):
         self.clip_orig: CLIP = m.clone()
-        if type(m.cond_stage_model) == SDXLClipModel:
+        if "SDXL" in type(m.cond_stage_model).__name__:
             def assign_funcs(clip_type):
+                if not hasattr(m.cond_stage_model, clip_type): return
                 mc = getattr(m.cond_stage_model, clip_type)
                 model_embeddings = mc.transformer.text_model.embeddings
                 model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self, textual_inversion_key = clip_type)
@@ -147,18 +146,31 @@ class StableDiffusionModelHijack:
 
     def undo_hijack(self, m):
         try:
-            if "SDXLClipModel" == type(m.cond_stage_model).__name__:
-                m.cond_stage_model.clip_l = m.cond_stage_model.clip_l.wrapped
-                model_embeddings_l = m.cond_stage_model.clip_l.transformer.text_model.embeddings
-                if type(model_embeddings_l.token_embedding) == EmbeddingsWithFixes:
-                    model_embeddings_l.token_embedding = model_embeddings_l.token_embedding.wrapped
+            if "SDXL" in type(m.cond_stage_model).__name__:
+                def undo_funcs(clip_type):
+                    if not hasattr(m.cond_stage_model, clip_type): return
+                    mc = getattr(m.cond_stage_model, clip_type, None)
+                    setattr(m.cond_stage_model, clip_type, mc.wrapped)
+                    mc = getattr(m.cond_stage_model, clip_type, None)
+                    if hasattr(mc, "encode_token_weights_orig"):
+                        mc.encode_token_weights = mc.encode_token_weights_orig
+                    model_embeddings = mc.transformer.text_model.embeddings
+                    if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                        model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+                undo_funcs("clip_l")
+                undo_funcs("clip_g")
+                # m.cond_stage_model.clip_l = m.cond_stage_model.clip_l.wrapped
+                # model_embeddings_l = m.cond_stage_model.clip_l.transformer.text_model.embeddings
+                # if type(model_embeddings_l.token_embedding) == EmbeddingsWithFixes:
+                #     model_embeddings_l.token_embedding = model_embeddings_l.token_embedding.wrapped
 
-                if hasattr(m.cond_stage_model.clip_g.wrapped, "encode_token_weights_orig"):
-                    m.cond_stage_model.clip_g.wrapped.encode_token_weights = m.cond_stage_model.clip_g.wrapped.encode_token_weights_orig
-                m.cond_stage_model.clip_g = m.cond_stage_model.clip_g.wrapped
-                model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
-                if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
-                    model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
+                # if hasattr(m.cond_stage_model.clip_g.wrapped, "encode_token_weights_orig"):
+                #     m.cond_stage_model.clip_g.wrapped.encode_token_weights = m.cond_stage_model.clip_g.wrapped.encode_token_weights_orig
+                # m.cond_stage_model.clip_g = m.cond_stage_model.clip_g.wrapped
+                # model_embeddings = m.cond_stage_model.clip_g.transformer.text_model.embeddings
+
+                # if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
+                #     model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
             else:
                 m.cond_stage_model = m.cond_stage_model.wrapped
                 model_embeddings = m.cond_stage_model.transformer.text_model.embeddings

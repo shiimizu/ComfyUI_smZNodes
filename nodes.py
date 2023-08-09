@@ -1,12 +1,9 @@
-from .modules import prompt_parser, devices, sd_hijack_optimizations, shared
+from .modules import prompt_parser, devices, shared
 from .modules.shared import opts
-from .modules.sd_hijack import model_hijack, list_optimizers
-from .modules import sd_hijack
-from .smZNodes import encode_from_tokens_with_custom_mean, encode_from_texts
-from comfy.cli_args import args
-from comfy.sdxl_clip import SDXLClipModel
+from .modules.sd_hijack import model_hijack
+from .smZNodes import  encode_from_texts
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
-from nodes import MAX_RESOLUTION, CLIPTextEncode
+from nodes import CLIPTextEncode, MAX_RESOLUTION
 import comfy.sd
 import comfy.model_management
 import torch

@@ -338,11 +338,12 @@ def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False
 
         # Only pad our initial gen of the schedules
         if with_pooled == None:
-            opts.return_batch_chunks = True
-            _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
-            _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
-            opts.return_batch_chunks = False
-            opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
+            if not opts.pad_with_repeats:
+                opts.return_batch_chunks = True
+                _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
+                _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
+                opts.return_batch_chunks = False
+                opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
         else:
             if isinstance(with_pooled['schedules_'], dict): with_pooled['schedules_lg'] = with_pooled['schedules_']
 
@@ -363,6 +364,12 @@ def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False
                 shared.sd_model.cond_stage_model_empty_prompt_l = empty_l
                 shared.sd_model.cond_stage_model_empty_prompt = empty
         opts.encode_count += 1
+        if opts.pad_with_repeats:
+            # Both yield the same output
+            g_out = expand(g_out, l_out, shared.sd_model.cond_stage_model_empty_prompt_g, True)
+            l_out = expand(l_out, g_out, shared.sd_model.cond_stage_model_empty_prompt_l, True)
+            # g_out = expand(g_out, l_out)
+            # l_out = expand(l_out, g_out)
         return (torch.cat([l_out, g_out], dim=-1), g_pooled)
 
     class Context:
@@ -566,26 +573,28 @@ def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase
 
 # =======================================================================================
 
-def inject_code(original_func, target_line, code_to_insert):
+def inject_code(original_func, data):
     # Get the source code of the original function
     original_source = inspect.getsource(original_func)
 
     # Split the source code into lines
     lines = original_source.split("\n")
 
-    # Find the line number of the target line
-    target_line_number = None
-    for i, line in enumerate(lines):
-        if target_line in line:
-            target_line_number = i + 1
-            break
+    for item in data:
+        # Find the line number of the target line
+        target_line_number = None
+        for i, line in enumerate(lines):
+            if item['target_line'] in line:
+                target_line_number = i + 1
+                break
 
-    if target_line_number is None:
-        # Target line not found, return the original function
-        return original_func
+        if target_line_number is None:
+            raise FileNotFoundError
+            # Target line not found, return the original function
+            # return original_func
 
-    # Insert the code to be injected after the target line
-    lines.insert(target_line_number, code_to_insert)
+        # Insert the code to be injected after the target line
+        lines.insert(target_line_number, item['code_to_insert'])
 
     # Recreate the modified source code
     modified_source = "\n".join(lines)
@@ -648,7 +657,9 @@ def process_conds_comfy(self, positive, negative):
         from comfy.samplers import (resolve_cond_masks, calculate_start_end_timesteps,
                                             create_cond_with_same_area_if_none, pre_run_control,
                                             apply_empty_x_to_equal_area, encode_adm)
-        noise = self.model_k.noise
+        noise = getattr(self.model_k, "noise", opts.noise)
+        if not hasattr(self, "device"):
+            self.device = devices.device
         device = self.device
 
         positive = broadcast_cond(positive, noise.shape[0], device)
@@ -685,19 +696,30 @@ def reconstruct_schedules(schedules, step):
     return reconstruct_fn(schedules, step)
 
 class CFGNoisePredictor(torch.nn.Module):
-    def __init__(self, model, ksampler):
+    def __init__(self, model):
         super().__init__()
-        self.ksampler = ksampler
+        self.ksampler = self._find_outer_instance()
         self.step = 0
-        self.orig = comfy.samplers.CFGNoisePredictor(model)
+        self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
         self.inner_model = CFGDenoiser(model.apply_model)
+        self.inner_model.num_timesteps = model.num_timesteps
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
-        self.inner_model.device = self.ksampler.device
+        self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.alphas_cumprod = model.alphas_cumprod
         self.cond_orig = None
         self.uncond_orig = None
 
+    def _find_outer_instance(self):
+        import inspect
+        frame = inspect.currentframe()
+        while frame:
+            if 'self' in frame.f_locals and isinstance(frame.f_locals['self'], comfy.samplers.KSampler):
+                return frame.f_locals['self']
+            frame = frame.f_back
+        return None
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
+        if not (cond[0][1].get('from_smZ', False) or uncond[0][1].get('from_smZ', False)):
+            return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
         if self.cond_orig is None:
             self.cond_orig = cond
         if self.uncond_orig is None:
@@ -709,6 +731,7 @@ class CFGNoisePredictor(torch.nn.Module):
         self.uncond_orig[0][1]['step_'] = self.step
 
         if self.step == 0:
+            self.ksampler = self._find_outer_instance()
             encode_fn = self.cond_orig[0][1]['encode_fn']
             cond = encode_fn(self.ksampler.steps)[0]
             cond[0][1]['step_'] = self.step
@@ -724,6 +747,7 @@ class CFGNoisePredictor(torch.nn.Module):
             encode_fn = self.init_cond[0][1]['encode_fn']
             cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
             cond[0][1]['step_'] = self.step
+            conds_list = cond[0][1].get('conds_list_', conds_list)
 
             encode_fn = self.init_uncond[0][1]['encode_fn']
             uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]

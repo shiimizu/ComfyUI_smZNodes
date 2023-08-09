@@ -56,7 +56,8 @@ opts.data['textual_inversion_add_hashes_to_infotext']  = False
 opts.data['encode_count'] = 0
 opts.data['max_chunk_count'] = 0
 opts.data['return_batch_chunks'] = False
-
+opts.data['noise'] = None
+opts.data['pad_with_repeats'] = True
 
 opts.data['use_CFGDenoiser'] = False
 opts.data['disable_max_denoise'] = True

@@ -70,18 +70,33 @@ from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
 # add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
-from .smZNodes import add_sample_dpmpp_2m_alt, inject_code
+from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
 
 add_sample_dpmpp_2m_alt()
 
 from comfy.samplers import KSampler
-injected_code = """
+payload = [{
+    "target_line": 'extra_args["denoise_mask"] = denoise_mask',
+    "code_to_insert": """
             if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
                 from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
                 if smZ_opts.disable_max_denoise:
                     max_denoise = False
-                from ComfyUI_smZNodes.smZNodes import set_model_k
-                set_model_k(self)
+                # from ComfyUI_smZNodes.smZNodes import set_model_k
+                # set_model_k(self)
 """
-modified_function = inject_code(KSampler.sample, target_line='extra_args["denoise_mask"] = denoise_mask', code_to_insert=injected_code)
-KSampler.sample = modified_function
+},
+{
+    "target_line": 'positive = positive[:]',
+    "code_to_insert": """
+        if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
+            from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
+            smZ_opts.noise = noise
+"""
+},
+]
+KSampler.sample = inject_code(KSampler.sample, payload)
+
+import comfy
+comfy.samplers.CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
+comfy.samplers.CFGNoisePredictor = CFGNoisePredictor

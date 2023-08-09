@@ -1,7 +1,7 @@
 from .modules import prompt_parser, devices, shared
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import  encode_from_texts
+from .smZNodes import encode_from_texts, expand
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
 from nodes import CLIPTextEncode, MAX_RESOLUTION
 import comfy.sd
@@ -111,11 +111,21 @@ class smZ_CLIPTextEncode:
                 def encode_token_weights_custom(toks,m):
                     if is_sdxl and isinstance(toks, dict):
                         tok_g = toks['g']
-                        tok_l = toks['l']
+
+                        # Refiner
+                        if not hasattr(m, "clip_l"):
+                            cond = encode_toks(tok_g, m)
+                            pooled = cond.pooled
+                            return (cond, pooled)
+
                         g_out = encode_toks(tok_g, m, "clip_g")
-                        l_out = encode_toks(tok_l, m, "clip_l")
-                        cond = torch.cat([l_out, g_out], dim=-1)
                         pooled = g_out.pooled
+
+                        tok_l = toks['l']
+                        l_out = encode_toks(tok_l, m, "clip_l")
+                        l_out = expand(l_out, g_out)
+                        g_out = expand(g_out, l_out)
+                        cond = torch.cat([l_out, g_out], dim=-1)
                     else:
                         cond = encode_toks(toks,m)
                         pooled = cond.pooled
@@ -128,7 +138,8 @@ class smZ_CLIPTextEncode:
                         clip_clone.cond_stage_model.clip_layer(clip_clone.layer_idx)
                     else:
                         clip_clone.cond_stage_model.reset_clip_layer()
-                    comfy.model_management.load_model_gpu(clip_clone.patcher)
+                    if with_pooled is None:
+                        comfy.model_management.load_model_gpu(clip_clone.patcher)
                     cond, pooled = encode_token_weights_custom(tokens, model_hijack.cond_stage_model)
                     model_hijack.undo_hijack(clip_clone)
                 except Exception as err:

@@ -732,25 +732,33 @@ class CFGNoisePredictor(torch.nn.Module):
 
         if self.step == 0:
             self.ksampler = self._find_outer_instance()
-            encode_fn = self.cond_orig[0][1]['encode_fn']
-            cond = encode_fn(self.ksampler.steps)[0]
+            if cond[0][1]['params']['parser'] != "comfy++":
+                encode_fn = self.cond_orig[0][1]['encode_fn']
+                cond = encode_fn(self.ksampler.steps)[0]
+                cond[0][1]['encode_fn'] = self.cond_orig[0][1]['encode_fn']
+                cond[0][1]['params'] = self.cond_orig[0][1]['params']
             cond[0][1]['step_'] = self.step
-            cond[0][1]['encode_fn'] = self.cond_orig[0][1]['encode_fn']
             self.init_cond = cond
 
-            encode_fn = self.uncond_orig[0][1]['encode_fn']
-            uncond = encode_fn(self.ksampler.steps)[0]
-            uncond[0][1]['encode_fn'] = self.uncond_orig[0][1]['encode_fn']
+            if uncond[0][1]['params']['parser'] != "comfy++":
+                encode_fn = self.uncond_orig[0][1]['encode_fn']
+                uncond = encode_fn(self.ksampler.steps)[0]
+                uncond[0][1]['encode_fn'] = self.uncond_orig[0][1]['encode_fn']
+                uncond[0][1]['params'] = self.uncond_orig[0][1]['params']
             uncond[0][1]['step_'] = self.step
             self.init_uncond = uncond
         else:
-            encode_fn = self.init_cond[0][1]['encode_fn']
-            cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
+            cond = self.init_cond
+            if cond[0][1]['params']['parser'] != "comfy++":
+                encode_fn = self.init_cond[0][1]['encode_fn']
+                cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
             cond[0][1]['step_'] = self.step
             conds_list = cond[0][1].get('conds_list_', conds_list)
 
-            encode_fn = self.init_uncond[0][1]['encode_fn']
-            uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
+            uncond = self.init_uncond
+            if uncond[0][1]['params']['parser'] != "comfy++":
+                encode_fn = self.init_uncond[0][1]['encode_fn']
+                uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
             uncond[0][1]['step_'] = self.step
 
         cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)

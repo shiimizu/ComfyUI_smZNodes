@@ -225,17 +225,18 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         """
         try:
             tokens = torch.asarray(remade_batch_tokens).to(devices.device)
+
+            # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
+            if self.id_end != self.id_pad:
+                for batch_pos in range(len(remade_batch_tokens)):
+                    index = remade_batch_tokens[batch_pos].index(self.id_end)
+                    tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
+
+            z = self.encode_with_transformers(tokens)
         except ValueError:
             # This is where Comfy tokens were fed in that has textual inversion embeddings in the list
             # i.e tensors in the list along with tokens
-            tokens = torch.asarray(self.wrapped(remade_batch_tokens)[0]).to(devices.device)
-        # this is for SD2: SD1 uses the same token for padding and end of text, while SD2 uses different ones.
-        if self.id_end != self.id_pad:
-            for batch_pos in range(len(remade_batch_tokens)):
-                index = remade_batch_tokens[batch_pos].index(self.id_end)
-                tokens[batch_pos, index+1:tokens.shape[1]] = self.id_pad
-
-        z = self.encode_with_transformers(tokens)
+            z = self.encode_with_transformers(remade_batch_tokens)
         pooled = getattr(z, 'pooled', None)
 
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise

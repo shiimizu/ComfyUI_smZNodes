@@ -114,7 +114,7 @@ class smZ_CLIPTextEncode:
 
                         # Refiner
                         if not hasattr(m, "clip_l"):
-                            cond = encode_toks(tok_g, m)
+                            cond = encode_toks(tok_g, m, "clip_g")
                             pooled = cond.pooled
                             return (cond, pooled)
 

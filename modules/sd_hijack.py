@@ -118,6 +118,7 @@ class StableDiffusionModelHijack:
                 mc = getattr(m.cond_stage_model, clip_type)
                 mc.clip_layer = getattr(mc.wrapped, "clip_layer", None)
                 mc.reset_clip_layer = getattr(mc.wrapped, "reset_clip_layer", None)
+                mc.transformer = getattr(mc.wrapped, "transformer", None)
             assign_funcs("clip_l")
             assign_funcs("clip_g")
             m.cond_stage_forward = "encode_token_weights"
@@ -130,6 +131,7 @@ class StableDiffusionModelHijack:
             m.cond_stage_model = FrozenCLIPEmbedderWithCustomWordsCustom(m.cond_stage_model, self)
             m.cond_stage_model.clip_layer = getattr(m.cond_stage_model.wrapped, "clip_layer", None)
             m.cond_stage_model.reset_clip_layer = getattr(m.cond_stage_model.wrapped, "reset_clip_layer", None)
+            m.cond_stage_model.transformer = getattr(m.cond_stage_model.wrapped, "transformer", None)
             
             # get_learned_conditioning() -> sd.py's self.cond_stage_model.encode(c) -> forward()
             # The is no `get_learned_conditioning()` so we add it, but make it

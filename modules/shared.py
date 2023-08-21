@@ -58,6 +58,7 @@ opts.data['max_chunk_count'] = 0
 opts.data['return_batch_chunks'] = False
 opts.data['noise'] = None
 opts.data['pad_with_repeats'] = True
+opts.data['conds_cache'] = {}
 
 opts.data['use_CFGDenoiser'] = False
 opts.data['disable_max_denoise'] = True

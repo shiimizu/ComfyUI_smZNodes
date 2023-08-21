@@ -196,6 +196,7 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps):
     res = []
     prompt_schedules = get_learned_conditioning_prompt_schedules(prompts, steps)
     cache = {}
+    first_pooled = None
     for prompt, prompt_schedule in zip(prompts, prompt_schedules):
         debug(f'Prompt schedule: {prompt_schedule}')
         cached = cache.get(prompt, None)
@@ -203,14 +204,22 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps):
             res.append(cached)
             continue
         texts = SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
-        conds = model.get_learned_conditioning(texts)
+        # conds = model.get_learned_conditioning(texts)
+        conds = model.forward(texts)
+        if first_pooled == None:
+            # first_pooled = conds.pooled
+            if conds.pooled.shape[0] > 1:
+                first_pooled = conds.pooled[1:2]
+            else:
+                first_pooled = conds.pooled[0:1]
         cond_schedule = []
         for i, (end_at_step, _) in enumerate(prompt_schedule):
             if isinstance(conds, dict):
                 cond = {k: v[i] for k, v in conds.items()}
             else:
                 cond = conds[i]
-
+            if i == 0:
+                cond.pooled = first_pooled
             cond_schedule.append(ScheduledPromptConditioning(end_at_step, cond))
 
         cache[prompt] = cond_schedule
@@ -298,6 +307,8 @@ def reconstruct_cond_batch(c: List[List[ScheduledPromptConditioning]], current_s
         else:
             res[i] = cond_schedule[target_index].cond
 
+    res.pooled = param.pooled
+    res.pooled.schedules = c
     return res
 
 
@@ -343,6 +354,8 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
     else:
         stacked = stack_conds(tensors).to(device=param.device, dtype=param.dtype)
 
+    stacked.pooled = param.pooled
+    stacked.pooled.schedules = c
     return conds_list, stacked
 
 

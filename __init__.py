@@ -70,10 +70,10 @@ from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
 # add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
-from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
+from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, sample_custom, CFGNoisePredictor
 
 add_sample_dpmpp_2m_alt()
-
+import comfy.sample
 from comfy.samplers import KSampler
 payload = [{
     "target_line": 'extra_args["denoise_mask"] = denoise_mask',
@@ -95,6 +95,8 @@ payload = [{
 """
 },
 ]
+comfy.sample.sample_orig = comfy.sample.sample
+comfy.sample.sample = sample_custom
 KSampler.sample = inject_code(KSampler.sample, payload)
 
 import comfy

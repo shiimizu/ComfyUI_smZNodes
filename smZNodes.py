@@ -8,8 +8,11 @@ from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords, FrozenCLIPEmbedderWithCustomWordsBase
-from comfy.sd1_clip import SD1Tokenizer, SD1ClipModel, unescape_important, escape_important
-from comfy.sdxl_clip import SDXLClipGTokenizer, SDXLClipG
+import comfy.sdxl_clip
+import comfy.sd1_clip
+import comfy.sample
+from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important
+from comfy.sdxl_clip import SDXLClipGTokenizer
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_base, model_management
@@ -45,7 +48,7 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-    def __init__(self, wrapped: SDXLClipG, hijack):
+    def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
         self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
         self.id_start = self.wrapped.tokenizer.bos_token_id
@@ -118,7 +121,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-    def __init__(self, wrapped: SD1ClipModel, hijack):
+    def __init__(self, wrapped: comfy.sd1_clip.SD1ClipModel, hijack):
         # okay to modiy since CLIP was cloned
         self.populate_self_variables(wrapped.tokenizer_parent) # SD1Tokenizer
         # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
@@ -308,6 +311,267 @@ def expand(t1, t2, empty_t=None, with_zeros=False):
     else:
         return t1
 
+class PopulateVars():
+    def populate_self_variables(self, from_):
+        super_attrs = vars(from_)
+        self_attrs = vars(self)
+        self_attrs.update(super_attrs)
+
+class ClipTokenWeightEncoder:
+    def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
+        schedules = token_weight_pairs
+        texts = token_weight_pairs
+        if isinstance(token_weight_pairs, list) and isinstance(token_weight_pairs[0], str):
+            from .modules.sd_hijack import model_hijack
+            try:
+                model_hijack.hijack(self)
+                # from A1111's processing.py and sd_samplers_kdiffusion.py
+                if multi:
+                    schedules = prompt_parser.get_multicond_learned_conditioning(model_hijack.cond_stage_model, texts, steps)
+                else:
+                    schedules = prompt_parser.get_learned_conditioning(model_hijack.cond_stage_model, texts, steps)
+                model_hijack.undo_hijack(model_hijack.cond_stage_model)
+            except Exception as err:
+                try:
+                    model_hijack.undo_hijack(model_hijack.cond_stage_model)
+                except Exception as err2:
+                    pass
+                raise err
+        elif type(token_weight_pairs) == list and type(token_weight_pairs[0]) == list and type(token_weight_pairs[0][0]) == tuple:
+            # comfy++
+            from .modules.sd_hijack import model_hijack
+            try:
+                model_hijack.hijack(self)
+                def encode_toks(_token_weight_pairs):
+                    zs = []
+                    first_pooled = None
+                    for batch_chunk in _token_weight_pairs:
+                        tokens_ = [x[0] for x in batch_chunk]
+                        multipliers = [x[1] for x in batch_chunk]
+                        z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
+                        if first_pooled == None:
+                            first_pooled = z.pooled
+                        zs.append(z)
+                    zcond = torch.hstack(zs)
+                    zcond.pooled = first_pooled
+                    return zcond
+                cond = encode_toks(token_weight_pairs) 
+                model_hijack.undo_hijack(model_hijack.cond_stage_model)
+            except Exception as err:
+                try:
+                    model_hijack.undo_hijack(model_hijack.cond_stage_model)
+                except Exception as err2:
+                    pass
+                raise err
+            conds_list = [[(0, 1.0)]]
+            cond.pooled.conds_list = conds_list
+            return (cond, cond.pooled)
+        conds_list = [[(0, 1.0)]]
+        cond = reconstruct_schedules(schedules, current_step)
+        if type(cond) == tuple:
+            conds_list, cond = cond
+        cond.pooled.conds_list = conds_list
+        return (cond, cond.pooled)
+
+class SD1ClipModel(ClipTokenWeightEncoder, comfy.sd1_clip.SD1ClipModel, PopulateVars):
+    def __init__(self):
+        pass
+    def wrap(self, clip_model, tokenizer):
+        self.populate_self_variables(clip_model)
+        self.tokenizer = tokenizer
+        return self
+
+class SDXLClipG(ClipTokenWeightEncoder, comfy.sdxl_clip.SDXLClipG, PopulateVars):
+    def __init__(self):
+        pass
+    def wrap(self, clip_model, tokenizer):
+        self.populate_self_variables(clip_model)
+        self.tokenizer = tokenizer
+        return self
+
+class SDXLClipModel(comfy.sdxl_clip.SDXLClipModel, PopulateVars):
+    def __init__(self):
+        pass
+    def wrap(self, clip_model, tokenizer: comfy.sdxl_clip.SDXLTokenizer):
+        self.populate_self_variables(clip_model)
+        self.clip_l_orig = self.clip_l
+        self.clip_g_orig = self.clip_g
+        self.clip_l_ = SD1ClipModel().wrap(self.clip_l, tokenizer.clip_l)
+        self.clip_g_ = SDXLClipG().wrap(self.clip_g, tokenizer.clip_g)
+        self.tokenizer = tokenizer
+        return self
+
+    def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
+        self.clip_g = self.clip_g_
+        self.clip_l = self.clip_l_
+        token_weight_pairs_g = token_weight_pairs["g"]
+        token_weight_pairs_l = token_weight_pairs["l"]
+        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
+        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l, steps, current_step, multi)
+        if hasattr(g_pooled, 'schedules') and hasattr(l_pooled, 'schedules'):
+            g_pooled.schedules = {"g": g_pooled.schedules, "l": l_pooled.schedules}
+        if opts.pad_with_repeats:
+            # Both yield the same results
+            # g_out = expand(g_out, l_out, shared.sd_model.cond_stage_model_empty_prompt_g, True)
+            # l_out = expand(l_out, g_out, shared.sd_model.cond_stage_model_empty_prompt_l, True)
+            g_out = expand(g_out, l_out)
+            l_out = expand(l_out, g_out)
+        self.clip_l = self.clip_l_orig
+        self.clip_g = self.clip_g_orig
+        return torch.cat([l_out, g_out], dim=-1), g_pooled
+
+class SDXLRefinerClipModel(comfy.sdxl_clip.SDXLRefinerClipModel, PopulateVars):
+    def __init__(self):
+        pass
+    def wrap(self, clip_model, tokenizer: comfy.sdxl_clip.SDXLTokenizer):
+        self.populate_self_variables(clip_model)
+        self.clip_g_orig = self.clip_g
+        self.clip_g_ = SDXLClipG().wrap(self.clip_g, tokenizer.clip_g)
+        self.tokenizer = tokenizer
+        return self
+    def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
+        self.clip_g = self.clip_g_
+        token_weight_pairs_g = token_weight_pairs["g"]
+        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
+        self.clip_g = self.clip_g_orig
+        if hasattr(g_pooled, 'schedules'):
+            g_pooled.schedules = {"g": g_pooled.schedules}
+        return (g_out, g_pooled)
+
+def sample_custom(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, noise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
+    params = locals()
+    for idx, orig in enumerate([positive,negative]):
+        if orig[0][1].get('from_smZ', False):
+            if "comfy" not in orig[0][1]['params']['parser']:
+                cond_text = 'positive' if idx == 0 else 'negative'
+                cid_orig = str(id(orig[0][1]['params']['clip']))
+                orig[0][1]['params']['steps'] = steps
+                global opts
+                conds_cache_cond = opts.conds_cache[cond_text].get(cid_orig, {})
+                if conds_cache_cond != {} and conds_cache_cond[0][1]['params'] == orig[0][1]['params']:
+                    # print("Unchanged",cond_text)
+                    params[cond_text] = conds_cache_cond
+                    continue
+                
+                # re-encode with total number of steps
+                # encode_fn = orig[0][1]['encode_fn']
+                # cond = encode_fn(steps)[0]
+                # cond[0][1]['encode_fn'] = orig[0][1]['encode_fn']
+                cond = run(**orig[0][1]['params'])[0]
+                cond[0][1]['params'] = {}
+                cond[0][1]['params'].update(orig[0][1]['params'])
+                cid = str(id(orig[0][1]['params']['clip']))
+                opts.conds_cache[cond_text][cid] = cond
+
+                params[cond_text] = cond
+
+    return comfy.sample.sample_orig(**params)
+
+from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
+from nodes import CLIPTextEncode
+
+def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
+               multi_conditioning, use_old_emphasis_implementation,
+               use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
+               crop_h, target_width, target_height, text_g, text_l, steps=0, with_pooled=None):
+    opts.prompt_mean_norm = mean_normalization
+    opts.use_old_emphasis_implementation = use_old_emphasis_implementation
+    opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
+    is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
+    if is_sdxl:
+        # Prevents tensor shape mismatch
+        shared.cmd_opts.always_batch_cond_uncond = True
+        shared.batch_cond_uncond = True
+        
+    parser_d = {"full": "Full parser",
+            "compel": "Compel parser",
+            "A1111": "A1111 parser",
+            "fixed attention": "Fixed attention",
+            "comfy++": "Comfy++ parser",
+            }
+    opts.prompt_attention = parser_d.get(parser, "Comfy parser")
+
+    if parser != "comfy":
+        opts.disable_max_denoise = True
+        opts.use_CFGDenoiser = use_CFGDenoiser # unused
+
+    sdxl_conds = {}
+    if with_SDXL and is_sdxl:
+        sdxl_conds = {
+            "aesthetic_score": ascore, "width": width, "height": height,
+            "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width,
+            "target_height": target_height, "text_g": text_g, "text_l": text_l
+        }
+    pooled={}
+    if parser == "comfy":
+        clip_model_type_name = type(clip.cond_stage_model).__name__ 
+        if with_SDXL and is_sdxl:
+            if clip_model_type_name== "SDXLClipModel":
+                out = CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
+                out[0][0][1]['aesthetic_score'] = sdxl_conds['aesthetic_score']
+                return out
+            elif clip_model_type_name == "SDXLRefinerClipModel":
+                out = CLIPTextEncodeSDXLRefiner().encode(clip, ascore, width, height, text)
+                for item in ['aesthetic_score', 'width', 'height', 'text_g', 'text_l']:
+                    sdxl_conds.pop(item)
+                out[0][0][1].update(sdxl_conds)
+                return out
+        else:
+            return CLIPTextEncode().encode(clip, text)
+    else:
+        texts = [text]
+        create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
+        texts = create_prompts(texts)
+        if is_sdxl:
+            if with_SDXL:
+                texts = {"g": create_prompts([text_g]), "l": create_prompts([text_l])}
+            else:
+                texts = {"g": texts, "l": texts}
+
+        clip_clone = clip.clone()
+        # clip_clone = clip
+        def get_custom_cond_stage_model():
+            nonlocal clip_clone
+            from .smZNodes import SD1ClipModel, SDXLClipModel, SDXLRefinerClipModel
+            clip_model_type_name = type(clip_clone.cond_stage_model).__name__
+            tokenizer = clip_clone.tokenizer
+            if clip_model_type_name== "SDXLClipModel":
+                return SDXLClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
+            elif clip_model_type_name == "SDXLRefinerClipModel":
+                return SDXLRefinerClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
+            else:
+                return SD1ClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
+
+        tokens = texts
+        if with_pooled != None:
+            tokens = with_pooled['pooled_output'].schedules
+        if parser == "comfy++":
+            tokens = clip_clone.tokenize(text)
+        cond = pooled = None
+
+        # Because of prompt editing, we need the total number of steps
+        # So this function will be called back at the sampling stage
+        if steps != 0 or parser == "comfy++":
+            cond_stage_model_orig = clip_clone.cond_stage_model
+            if with_pooled == None:
+                clip_clone.cond_stage_model = get_custom_cond_stage_model()
+                clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
+            else:
+                clip_clone.load_model_orig = clip_clone.load_model
+                clip_clone.load_model = lambda x=None:x
+                clip_clone.cond_stage_model = with_pooled['pooled_output'].cond_stage_model
+            cond, pooled = clip_clone.encode_from_tokens(tokens, True)
+            if with_pooled == None:
+                pooled.cond_stage_model = clip_clone.cond_stage_model
+            else:
+                clip_clone.load_model = clip_clone.load_model_orig
+            clip_clone.cond_stage_model = cond_stage_model_orig
+
+
+
+        pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_conds}
+    return ([[cond, pooled if with_pooled == None else with_pooled]], )
+
 def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False, with_pooled=None):
     '''
     The function is our rendition of `clip.encode_from_tokens()`.
@@ -406,7 +670,7 @@ def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False
 
         # Only call this function on init
         if steps == 0:
-            model_management.load_model_gpu(self.patcher)
+            self.load_model()
         cond, pooled = self.cond_stage_model.encode_token_weights(tokens)
         if return_pooled:
             return cond, pooled
@@ -450,8 +714,8 @@ def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False)
 
     return ret
 
-def encode_token_weights_customized(self: SD1ClipModel|FrozenCLIPEmbedderWithCustomWordsBase, token_weight_pairs):
-    if isinstance(self, SD1ClipModel):
+def encode_token_weights_customized(self: comfy.sd1_clip.SD1ClipModel|FrozenCLIPEmbedderWithCustomWordsBase, token_weight_pairs):
+    if isinstance(self, comfy.sd1_clip.SD1ClipModel):
         to_encode = list(self.empty_tokens)
     else:
         to_encode = list(self.wrapped.empty_tokens)
@@ -708,6 +972,7 @@ class CFGNoisePredictor(torch.nn.Module):
         self.alphas_cumprod = model.alphas_cumprod
         self.cond_orig = None
         self.uncond_orig = None
+        self.c_adm = None
 
     def _find_outer_instance(self):
         import inspect
@@ -717,62 +982,71 @@ class CFGNoisePredictor(torch.nn.Module):
                 return frame.f_locals['self']
             frame = frame.f_back
         return None
+
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        if not (cond[0][1].get('from_smZ', False) or uncond[0][1].get('from_smZ', False)):
+        if not (cond[0][1].get('from_smZ', False) and uncond[0][1].get('from_smZ', False)):
             return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
-        if self.cond_orig is None:
-            self.cond_orig = cond
-        if self.uncond_orig is None:
-            self.uncond_orig = uncond
-        conds_list = [[(0, 1.0)]]
-        co = cond[0][0]
-        unc = uncond[0][0]
-        self.cond_orig[0][1]['step_'] = self.step
-        self.uncond_orig[0][1]['step_'] = self.step
 
         if self.step == 0:
-            self.ksampler = self._find_outer_instance()
-            if cond[0][1]['params']['parser'] != "comfy++":
-                encode_fn = self.cond_orig[0][1]['encode_fn']
-                cond = encode_fn(self.ksampler.steps)[0]
-                cond[0][1]['encode_fn'] = self.cond_orig[0][1]['encode_fn']
-                cond[0][1]['params'] = self.cond_orig[0][1]['params']
-            cond[0][1]['step_'] = self.step
             self.init_cond = cond
-
-            if uncond[0][1]['params']['parser'] != "comfy++":
-                encode_fn = self.uncond_orig[0][1]['encode_fn']
-                uncond = encode_fn(self.ksampler.steps)[0]
-                uncond[0][1]['encode_fn'] = self.uncond_orig[0][1]['encode_fn']
-                uncond[0][1]['params'] = self.uncond_orig[0][1]['params']
-            uncond[0][1]['step_'] = self.step
             self.init_uncond = uncond
+            # self.clip = self.init_cond[0][1]['params']['clip']
+            # self.clip.cond_stage_model = SDXLClipModel().wrap(self.clip.cond_stage_model, self.clip.tokenizer)
         else:
             cond = self.init_cond
-            if cond[0][1]['params']['parser'] != "comfy++":
-                encode_fn = self.init_cond[0][1]['encode_fn']
-                cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
-            cond[0][1]['step_'] = self.step
-            conds_list = cond[0][1].get('conds_list_', conds_list)
+            cond_bak = cond
+            if cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']:
+                # schedules = self.init_cond[0][1]['pooled_output'].schedules
+                # multi_conditioning = self.init_cond[0][1]['params']['multi_conditioning']
+                # self.clip.cond_stage_model.encode_token_weights = partial(self.clip.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
+                steps = self.init_cond[0][1]['params']['steps']
+                params = self.init_cond[0][1]['params']
+                cond = run(with_pooled=self.init_cond[0][1], **params)[0] # params includes steps
+
+                # encode_fn = self.init_cond[0][1]['encode_fn']
+                # cond = encode_fn(self.init_cond[0][1]['params']['steps'], self.init_cond[0][1])[0]
+                # cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
+
+                # schedules = getattr(cond[0][1]['pooled_output'], 'schedules', None)
+                # cond = reconstruct_schedules(schedules, self.step)
+                # if type(cond) == tuple:
+                #     conds_list, cond = cond
+                # cond = [[cond, cond_bak[0][1]]]
+            # conds_list = [[(0, 1.0)]]
 
             uncond = self.init_uncond
-            if uncond[0][1]['params']['parser'] != "comfy++":
-                encode_fn = self.init_uncond[0][1]['encode_fn']
-                uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
-            uncond[0][1]['step_'] = self.step
+            uncond_bak = uncond
+            if uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser']:
+                steps = self.init_uncond[0][1]['params']['steps']
+                params = self.init_uncond[0][1]['params']
+                uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]
+                # encode_fn = self.init_uncond[0][1]['encode_fn']
+                # uncond = encode_fn(self.init_uncond[0][1]['params']['steps'], self.init_uncond[0][1])[0]
+                # uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
+                # schedules = getattr(uncond[0][1]['pooled_output'], 'schedules', None)
+                # uncond = reconstruct_schedules(schedules, self.step)
+                # if type(uncond) == tuple:
+                #     _, uncond = uncond
+                # uncond = [[uncond, uncond_bak[0][1]]]
 
-        cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
+            # if ((cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']) or
+            #     (uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser'])):
+            if not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item() :
+                cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
+            
         co = cond[0][0]
         unc = uncond[0][0]
-        co = expand(co, unc)
-        unc = expand(unc, co)
+        if cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1].get('params',{}).get('parser', 'comfy'):
+            co = expand(co, unc)
+        if uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1].get('params',{}).get('parser', 'comfy'):
+            unc = expand(unc, co)
 
-        c_adm = None
-        if cond[0][1].get("adm_encoded", None) != None:
-            c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
-        x.c_adm = c_adm
 
         if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):
+            if cond[0][1].get("adm_encoded", None) != None and self.c_adm == None:
+                self.c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
+            x.c_adm = self.c_adm
+            conds_list = cond[0][1]['pooled_output'].conds_list
             cond = (conds_list, co)
             image_cond = txt2img_image_conditioning(None, x)
             out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)

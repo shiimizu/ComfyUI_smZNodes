@@ -90,6 +90,7 @@ payload = [{
         if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
             from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
             smZ_opts.noise = noise
+            self.model_denoise.step = start_step if start_step != None else 0
 """
 },
 ]

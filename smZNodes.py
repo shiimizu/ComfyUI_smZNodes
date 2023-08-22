@@ -562,9 +562,9 @@ class CFGNoisePredictor(torch.nn.Module):
         self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
         self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.alphas_cumprod = model.alphas_cumprod
-        self.cond_orig = None
-        self.uncond_orig = None
         self.c_adm = None
+        self.init_cond = None
+        self.init_uncond = None
         self.is_prompt_editing_u = False
         self.is_prompt_editing_c = False
 
@@ -572,27 +572,25 @@ class CFGNoisePredictor(torch.nn.Module):
         if not (cond[0][1].get('from_smZ', False) and uncond[0][1].get('from_smZ', False)):
             return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
 
-        if self.step == 0:
+        if self.init_cond is None:
             self.init_cond = cond
             self.init_uncond = uncond
             self.is_prompt_editing_c = is_prompt_editing(getattr(cond[0][1]['pooled_output'], 'schedules', None))
             self.is_prompt_editing_u = is_prompt_editing(getattr(uncond[0][1]['pooled_output'], 'schedules', None))
-        else:
+        if self.step != 0:
             cond = self.init_cond
-            cond_bak = cond
             if self.is_prompt_editing_c:
-                params = self.init_cond[0][1]['params']
+                params = cond[0][1]['params']
                 params['step'] = self.step
-                cond = run(with_pooled=self.init_cond[0][1], **params)[0]
+                cond = run(with_pooled=cond[0][1], **params)[0]
 
             uncond = self.init_uncond
-            uncond_bak = uncond
             if self.is_prompt_editing_u:
-                params = self.init_uncond[0][1]['params']
+                params = uncond[0][1]['params']
                 params['step'] = self.step
-                uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]
+                uncond = run(with_pooled=uncond[0][1], **params)[0]
 
-            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item()):
+            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(self.init_cond[0][0] == cond[0][0]).item() or not torch.all(self.init_uncond[0][0] == uncond[0][0]).item()):
                 cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
             
         co = cond[0][0]

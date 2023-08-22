@@ -1,7 +1,7 @@
 from .modules import prompt_parser, devices, shared
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_texts, expand, run
+from .smZNodes import encode_from_texts, expand, run, LazyCond
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
 from nodes import CLIPTextEncode, MAX_RESOLUTION
 import comfy.sd
@@ -57,11 +57,12 @@ class smZ_CLIPTextEncode:
         devices.dtype_vae = comfy.model_management.vae_dtype()
         opts.conds_cache.clear()
         opts.conds_cache = {"positive":{}, "negative":{}}
-        params.pop('self')
+        params.pop('self', None)
         result = run(**params)
         # result[0][0][1]['encode_fn'] = run
-        result[0][0][1]['params'] = params
-        return result
+        result[0][0][1]['params'] = {}
+        result[0][0][1]['params'].update(params)
+        return (LazyCond(result[0]),)
 
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique

@@ -95,8 +95,7 @@ payload = [{
 """
 },
 ]
-comfy.sample.sample_orig = comfy.sample.sample
-comfy.sample.sample = sample_custom
+
 KSampler.sample = inject_code(KSampler.sample, payload)
 
 import comfy

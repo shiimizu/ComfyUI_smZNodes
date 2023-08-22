@@ -13,6 +13,8 @@ import comfy.sd1_clip
 import comfy.sample
 from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important
 from comfy.sdxl_clip import SDXLClipGTokenizer
+from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
+from nodes import CLIPTextEncode
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_base, model_management
@@ -485,13 +487,53 @@ def sample_custom(model, noise, steps, cfg, sampler_name, scheduler, positive, n
 
     return comfy.sample.sample_orig(**params)
 
-from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
-from nodes import CLIPTextEncode
+def _find_outer_instance(target):
+    import inspect
+    frame = inspect.currentframe()
+    while frame:
+        if target in frame.f_locals:
+            if frame.f_locals[target] != 1: # steps == 1
+                return frame.f_locals[target]
+        frame = frame.f_back
+    return None
+
+class LazyCond:
+    def __init__(self, cond = None):
+        self.cond = cond
+        self.steps = 1
+
+    def __get__(self, instance, owner):
+        return self._get()
+
+    def _get(self):
+        if (steps := _find_outer_instance('steps')) is None:
+            steps = self.steps
+        if self.steps != steps:
+            self.steps = steps
+            if self._is_prompt_editing():
+                params = self.cond[0][1]['params']
+                params['steps'] = steps
+                params.pop('step', None)
+                res = run(**params)[0]
+                res[0][1]['params'] = {}
+                res[0][1]['params'].update(params)
+                self.cond = res
+        return self.cond
+
+    def _is_prompt_editing(self):
+        res = False
+        schedules = getattr(self.cond[0][1]['pooled_output'], 'schedules', None)
+        if schedules != None:
+            res = is_prompt_editing(schedules)
+        return res
+
+    def __iter__(self):
+        return self._get().__iter__()
 
 def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                multi_conditioning, use_old_emphasis_implementation,
                use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
-               crop_h, target_width, target_height, text_g, text_l, steps=0, step=0, with_pooled=None):
+               crop_h, target_width, target_height, text_g, text_l, steps=1, step=0, with_pooled=None):
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
@@ -569,21 +611,21 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
 
         # Because of prompt editing, we need the total number of steps
         # So this function will be called back at the sampling stage
-        if steps != 0 or parser == "comfy++":
-            cond_stage_model_orig = clip_clone.cond_stage_model
-            if with_pooled == None:
-                clip_clone.cond_stage_model = get_custom_cond_stage_model()
-            else:
-                clip_clone.load_model_orig = clip_clone.load_model
-                clip_clone.load_model = lambda x=None:x
-                clip_clone.cond_stage_model = with_pooled['pooled_output'].cond_stage_model
-            clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, current_step=step, multi=multi_conditioning)
-            cond, pooled = clip_clone.encode_from_tokens(tokens, True)
-            if with_pooled == None:
-                pooled.cond_stage_model = clip_clone.cond_stage_model
-            else:
-                clip_clone.load_model = clip_clone.load_model_orig
-            clip_clone.cond_stage_model = cond_stage_model_orig
+        # Note that this means encoding will happen twice
+        cond_stage_model_orig = clip_clone.cond_stage_model
+        if with_pooled == None:
+            clip_clone.cond_stage_model = get_custom_cond_stage_model()
+        else:
+            clip_clone.load_model_orig = clip_clone.load_model
+            clip_clone.load_model = lambda x=None:x
+            clip_clone.cond_stage_model = with_pooled['pooled_output'].cond_stage_model
+        clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, current_step=step, multi=multi_conditioning)
+        cond, pooled = clip_clone.encode_from_tokens(tokens, True)
+        if with_pooled == None:
+            pooled.cond_stage_model = clip_clone.cond_stage_model
+        else:
+            clip_clone.load_model = clip_clone.load_model_orig
+        clip_clone.cond_stage_model = cond_stage_model_orig
 
 
 
@@ -1015,7 +1057,7 @@ class CFGNoisePredictor(torch.nn.Module):
         else:
             cond = self.init_cond
             cond_bak = cond
-            if self.is_prompt_editing_c and cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']:
+            if self.is_prompt_editing_c:
                 # schedules = self.init_cond[0][1]['pooled_output'].schedules
                 # multi_conditioning = self.init_cond[0][1]['params']['multi_conditioning']
                 # self.clip.cond_stage_model.encode_token_weights = partial(self.clip.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
@@ -1037,7 +1079,7 @@ class CFGNoisePredictor(torch.nn.Module):
             
             uncond = self.init_uncond
             uncond_bak = uncond
-            if self.is_prompt_editing_u and uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser']:
+            if self.is_prompt_editing_u:
                 params = self.init_uncond[0][1]['params']
                 params['step'] = self.step
                 uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]

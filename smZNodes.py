@@ -434,7 +434,15 @@ class LazyCond:
         return self.cond
 
     def _is_prompt_editing(self):
-        return is_prompt_editing(getattr(self.cond[0][1]['pooled_output'], 'schedules', None))
+        params = self.cond[0][1]['params']
+        text = params['text']
+        text_g = params['text_g']
+        text_l = params['text_l']
+        with_SDXL = params['with_SDXL']
+        is_SDXL = "SDXL" in type(params['clip'].cond_stage_model).__name__
+        text_all = (text_g + ' ' + text_l) if with_SDXL and is_SDXL else text
+        found = '[' in text_all and ']' in text_all
+        return found or is_prompt_editing(getattr(self.cond[0][1]['pooled_output'], 'schedules', None))
 
     def __iter__(self):
         return self._get().__iter__()

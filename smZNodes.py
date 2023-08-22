@@ -8,6 +8,8 @@ from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords, FrozenCLIPEmbedderWithCustomWordsBase
+from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
+from .modules.textual_inversion.textual_inversion import Embedding
 import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
@@ -15,7 +17,6 @@ from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important
 from comfy.sdxl_clip import SDXLClipGTokenizer
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
 from nodes import CLIPTextEncode
-from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_base, model_management
 from comfy.samplers import KSampler, CompVisVDenoiser, KSamplerX0Inpaint
@@ -28,7 +29,6 @@ import functools
 import tempfile
 import importlib
 import sys
-import itertools
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -43,13 +43,13 @@ def get_learned_conditioning(self, c):
         c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
     return c
 
-# Open Clip
-class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, SDXLClipGTokenizer):
+class PopulateVars():
     def populate_self_variables(self, from_):
         super_attrs = vars(from_)
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
+class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, SDXLClipGTokenizer, PopulateVars):
     def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
         self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
@@ -114,17 +114,11 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         return tokenized
 
 
-class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, SD1Tokenizer):
+class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, SD1Tokenizer, PopulateVars):
     '''
     Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
     '''
-    def populate_self_variables(self, from_):
-        super_attrs = vars(from_)
-        self_attrs = vars(self)
-        self_attrs.update(super_attrs)
-
     def __init__(self, wrapped: comfy.sd1_clip.SD1ClipModel, hijack):
-        # okay to modiy since CLIP was cloned
         self.populate_self_variables(wrapped.tokenizer_parent) # SD1Tokenizer
         # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
         super().__init__(wrapped, hijack)
@@ -255,52 +249,6 @@ def parse_and_register_embeddings(self, text: str, return_word_ids=False):
             tokens += tmp
     return tokens
 
-class Embedding:
-    def __init__(self, vec, name, step=None):
-        self.vec = vec
-        self.name = name
-        self.step = step
-        self.shape = None
-        self.vectors = 0
-        self.cached_checksum = None
-        self.sd_checkpoint = None
-        self.sd_checkpoint_name = None
-        self.optimizer_state_dict = None
-        self.filename = None
-
-    def save(self, filename):
-        embedding_data = {
-            "string_to_token": {"*": 265},
-            "string_to_param": {"*": self.vec},
-            "name": self.name,
-            "step": self.step,
-            "sd_checkpoint": self.sd_checkpoint,
-            "sd_checkpoint_name": self.sd_checkpoint_name,
-        }
-
-        torch.save(embedding_data, filename)
-
-        if shared.opts.save_optimizer_state and self.optimizer_state_dict is not None:
-            optimizer_saved_dict = {
-                'hash': self.checksum(),
-                'optimizer_state_dict': self.optimizer_state_dict,
-            }
-            torch.save(optimizer_saved_dict, f"{filename}.optim")
-
-    def checksum(self):
-        if self.cached_checksum is not None:
-            return self.cached_checksum
-
-        def const_hash(a):
-            r = 0
-            for v in a:
-                r = (r * 281 ^ int(v) * 997) & 0xFFFFFFFF
-            return r
-
-        self.cached_checksum = f'{const_hash(self.vec.reshape(-1) * 100) & 0xffff:04x}'
-        return self.cached_checksum
-
-
 def expand(t1, t2, empty_t=None, with_zeros=False):
     if t1.shape[1] < t2.shape[1]:
         if with_zeros:
@@ -313,11 +261,11 @@ def expand(t1, t2, empty_t=None, with_zeros=False):
     else:
         return t1
 
-class PopulateVars():
-    def populate_self_variables(self, from_):
-        super_attrs = vars(from_)
-        self_attrs = vars(self)
-        self_attrs.update(super_attrs)
+def reconstruct_schedules(schedules, step):
+    create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
+    reconstruct_fn = create_reconstruct_fn(schedules)
+    return reconstruct_fn(schedules, step)
+
 
 class ClipTokenWeightEncoder:
     def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
@@ -451,49 +399,14 @@ def is_prompt_editing(schedules):
             if len(v.batch[0][0].schedules) != 1: return True
     return False
 
-def sample_custom(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, noise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
-    params = locals()
-    for idx, orig in enumerate([positive,negative]):
-        if orig[0][1].get('from_smZ', False):
-            if "comfy" not in orig[0][1]['params']['parser']:
-                global opts
-                cond_text = 'positive' if idx == 0 else 'negative'
-                cid_orig = str(id(orig[0][1]['params']['clip']))
-                orig[0][1]['params']['steps'] = steps
-                conds_cache_cond = opts.conds_cache[cond_text].get(cid_orig, {})
-                if conds_cache_cond != {}:
-                    is_prompt_editing_ = False
-                    schedules = getattr(conds_cache_cond[0][1]['pooled_output'], 'schedules', None)
-                    if schedules!= None:
-                        is_prompt_editing_ = is_prompt_editing(schedules)
-                    conds_cache_cond[0][1]['params'].pop('step', None)
-                    orig[0][1]['params'].pop('step', None)
-                    if conds_cache_cond[0][1]['params'] == orig[0][1]['params'] or not is_prompt_editing_:
-                        # print("Unchanged",cond_text, is_prompt_editing_)
-                        params[cond_text] = conds_cache_cond
-                        continue
-                
-                # re-encode with total number of steps
-                # encode_fn = orig[0][1]['encode_fn']
-                # cond = encode_fn(steps)[0]
-                # cond[0][1]['encode_fn'] = orig[0][1]['encode_fn']
-                cond = run(**orig[0][1]['params'])[0]
-                cond[0][1]['params'] = {}
-                cond[0][1]['params'].update(orig[0][1]['params'])
-                cid = str(id(orig[0][1]['params']['clip']))
-                opts.conds_cache[cond_text][cid] = cond
-
-                params[cond_text] = cond
-
-    return comfy.sample.sample_orig(**params)
-
-def _find_outer_instance(target):
+def _find_outer_instance(target, target_type):
     import inspect
     frame = inspect.currentframe()
     while frame:
         if target in frame.f_locals:
-            if frame.f_locals[target] != 1: # steps == 1
-                return frame.f_locals[target]
+            found = frame.f_locals[target]
+            if isinstance(found, target_type) and found != 1: # steps == 1
+                return found
         frame = frame.f_back
     return None
 
@@ -506,7 +419,7 @@ class LazyCond:
         return self._get()
 
     def _get(self):
-        if (steps := _find_outer_instance('steps')) is None:
+        if (steps := _find_outer_instance('steps', int)) is None:
             steps = self.steps
         if self.steps != steps:
             self.steps = steps
@@ -521,11 +434,7 @@ class LazyCond:
         return self.cond
 
     def _is_prompt_editing(self):
-        res = False
-        schedules = getattr(self.cond[0][1]['pooled_output'], 'schedules', None)
-        if schedules != None:
-            res = is_prompt_editing(schedules)
-        return res
+        return is_prompt_editing(getattr(self.cond[0][1]['pooled_output'], 'schedules', None))
 
     def __iter__(self):
         return self._get().__iter__()
@@ -632,268 +541,171 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_conds}
     return ([[cond, pooled if with_pooled == None else with_pooled]], )
 
-def encode_from_texts(clip: CLIP, texts, steps, return_pooled=False, multi=False, with_pooled=None):
-    '''
-    The function is our rendition of `clip.encode_from_tokens()`.
-    It still calls `clip.encode_from_tokens()` but hijacks the
-    `clip.cond_stage_model.encode_token_weights()` method
-    so we can run our own version of `encode_token_weights()`
+# ========================================================================
 
-    Originally from `sd.py`: `encode_from_tokens()`
-    '''
-    tokens=texts
-    partial_method = partial(get_learned_conditioning_custom, steps=steps, return_pooled=return_pooled, multi=multi, with_pooled=with_pooled)
+class CFGNoisePredictor(torch.nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.ksampler = _find_outer_instance('self', comfy.samplers.KSampler)
+        self.step = 0
+        self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
+        self.inner_model = CFGDenoiser(model.apply_model)
+        self.inner_model.num_timesteps = model.num_timesteps
+        self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
+        self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
+        self.alphas_cumprod = model.alphas_cumprod
+        self.cond_orig = None
+        self.uncond_orig = None
+        self.c_adm = None
+        self.is_prompt_editing_u = False
+        self.is_prompt_editing_c = False
 
-    def assign_funcs(mc, fn=None):
-        mc.encode_token_weights_orig = mc.encode_token_weights
-        mc.encode_token_weights = MethodType(partial_method if fn == None else fn, mc)
-    def restore_funcs(mc):
-        if hasattr(mc, "encode_token_weights_orig"):
-            mc.encode_token_weights = mc.encode_token_weights_orig
+    def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
+        if not (cond[0][1].get('from_smZ', False) and uncond[0][1].get('from_smZ', False)):
+            return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
 
-    # Get the max chunk_count to pad the tokens on varying clip_g and clip_l lengths.
-    # To account for both positive and negative conditionings, opts.max_chunk_count is reset before sampling.
-    def encode_token_weights_sdxl(self, token_weight_pairs):
-        if opts.encode_count >= 2:
-            opts.max_chunk_count = 0
-            opts.encode_count = 0
-        token_weight_pairs_g = token_weight_pairs["g"]
-        token_weight_pairs_l = token_weight_pairs["l"]
-
-        # Only pad our initial gen of the schedules
-        if with_pooled == None:
-            if not opts.pad_with_repeats:
-                opts.return_batch_chunks = True
-                _, bcc_g = self.clip_g.encode_token_weights(token_weight_pairs_g)
-                _, bcc_l = self.clip_l.encode_token_weights(token_weight_pairs_l)
-                opts.return_batch_chunks = False
-                opts.max_chunk_count = max(bcc_g, bcc_l, opts.max_chunk_count)
+        if self.step == 0:
+            self.init_cond = cond
+            self.init_uncond = uncond
+            self.is_prompt_editing_c = is_prompt_editing(getattr(cond[0][1]['pooled_output'], 'schedules', None))
+            self.is_prompt_editing_u = is_prompt_editing(getattr(uncond[0][1]['pooled_output'], 'schedules', None))
         else:
-            if isinstance(with_pooled['schedules_'], dict): with_pooled['schedules_lg'] = with_pooled['schedules_']
+            cond = self.init_cond
+            cond_bak = cond
+            if self.is_prompt_editing_c:
+                params = self.init_cond[0][1]['params']
+                params['step'] = self.step
+                cond = run(with_pooled=self.init_cond[0][1], **params)[0]
 
-        if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['g']
-        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
+            uncond = self.init_uncond
+            uncond_bak = uncond
+            if self.is_prompt_editing_u:
+                params = self.init_uncond[0][1]['params']
+                params['step'] = self.step
+                uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]
 
-        if with_pooled != None: with_pooled['schedules_'] = with_pooled['schedules_lg']['l']
-        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
+            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item()):
+                cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
+            
+        co = cond[0][0]
+        unc = uncond[0][0]
+        if cond[0][1].get('from_smZ', False) and "comfy" != cond[0][1].get('params',{}).get('parser', 'comfy'):
+            co = expand(co, unc)
+        if uncond[0][1].get('from_smZ', False) and "comfy" != uncond[0][1].get('params',{}).get('parser', 'comfy'):
+            unc = expand(unc, co)
 
-        g_pooled.cond = {"g": g_pooled.cond, "l": l_pooled.cond }
 
-        with devices.autocast(), torch.no_grad():
-            if with_pooled == None:
-                empty_g = self.clip_g.encode_token_weights([""])[0]
-                empty_l = self.clip_l.encode_token_weights([""])[0]
-                empty = torch.cat([empty_l, empty_g], dim=-1)
-                shared.sd_model.cond_stage_model_empty_prompt_g = empty_g
-                shared.sd_model.cond_stage_model_empty_prompt_l = empty_l
-                shared.sd_model.cond_stage_model_empty_prompt = empty
-        opts.encode_count += 1
-        if opts.pad_with_repeats:
-            # Both yield the same output
-            g_out = expand(g_out, l_out, shared.sd_model.cond_stage_model_empty_prompt_g, True)
-            l_out = expand(l_out, g_out, shared.sd_model.cond_stage_model_empty_prompt_l, True)
-            # g_out = expand(g_out, l_out)
-            # l_out = expand(l_out, g_out)
-        return (torch.cat([l_out, g_out], dim=-1), g_pooled)
-
-    class Context:
-        def __init__(self):
-            if "SDXL" in type(clip.cond_stage_model).__name__:
-                if hasattr(clip.cond_stage_model, "clip_l"):
-                    assign_funcs(clip.cond_stage_model.clip_l)
-                if hasattr(clip.cond_stage_model, "clip_g"):
-                    assign_funcs(clip.cond_stage_model.clip_g)
-                if hasattr(clip.cond_stage_model, "clip_l") and hasattr(clip.cond_stage_model, "clip_g"):
-                    assign_funcs(clip.cond_stage_model, encode_token_weights_sdxl)
-            else:
-                assign_funcs(clip.cond_stage_model)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args, **kwargs):
-            if "SDXL" in type(clip.cond_stage_model).__name__:
-                if hasattr(clip.cond_stage_model, "clip_l"):
-                    restore_funcs(clip.cond_stage_model.clip_l)
-                if hasattr(clip.cond_stage_model, "clip_g"):
-                    restore_funcs(clip.cond_stage_model.clip_g)
-                if hasattr(clip.cond_stage_model, "clip_l") and hasattr(clip.cond_stage_model, "clip_g"):
-                    restore_funcs(clip.cond_stage_model)
-            else:
-                restore_funcs(clip.cond_stage_model)
-
-    def encode_from_tokens(self, tokens, return_pooled=False):
-        if self.layer_idx is not None:
-            self.cond_stage_model.clip_layer(self.layer_idx)
+        if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):
+            if cond[0][1].get("adm_encoded", None) != None and self.c_adm == None:
+                self.c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
+            x.c_adm = self.c_adm
+            conds_list = cond[0][1]['pooled_output'].conds_list
+            cond = (conds_list, co)
+            image_cond = txt2img_image_conditioning(None, x)
+            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
         else:
-            self.cond_stage_model.reset_clip_layer()
+            cond = [[co, cond[0][1]]]
+            uncond = [[unc, uncond[0][1]]]
+            out = self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
+        self.step += 1
+        return out
 
-        # Only call this function on init
-        if steps == 0:
-            self.load_model()
-        cond, pooled = self.cond_stage_model.encode_token_weights(tokens)
-        if return_pooled:
-            return cond, pooled
-        return cond
-    with Context():
-        return encode_from_tokens(clip, tokens, return_pooled)
-        # return clip.encode_from_tokens(tokens, return_pooled)
+def txt2img_image_conditioning(sd_model, x, width=None, height=None):
+    return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
+    # if sd_model.model.conditioning_key in {'hybrid', 'concat'}: # Inpainting models
+    #     # The "masked-image" in this case will just be all zeros since the entire image is masked.
+    #     image_conditioning = torch.zeros(x.shape[0], 3, height, width, device=x.device)
+    #     image_conditioning = sd_model.get_first_stage_encoding(sd_model.encode_first_stage(image_conditioning))
+    #     # Add the fake full 1s mask to the first dimension.
+    #     image_conditioning = torch.nn.functional.pad(image_conditioning, (0, 0, 0, 0, 1, 0), value=1.0)
+    #     image_conditioning = image_conditioning.to(x.dtype)
+    #     return image_conditioning
+    # elif sd_model.model.conditioning_key == "crossattn-adm": # UnCLIP models
+    #     return x.new_zeros(x.shape[0], 2*sd_model.noise_augmentor.time_embed.dim, dtype=x.dtype, device=x.device)
+    # else:
+    #     # Dummy zero conditioning if we're not using inpainting or unclip models.
+    #     # Still takes up a bit of memory, but no encoder call.
+    #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
+    #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
 
-def encode_from_tokens_with_custom_mean(clip: CLIP, tokens, return_pooled=False):
-    '''
-    The function is our rendition of `clip.encode_from_tokens()`.
-    It still calls `clip.encode_from_tokens()` but hijacks the
-    `clip.cond_stage_model.encode_token_weights()` method
-    so we can run our own version of `encode_token_weights()`
+def process_conds_comfy(self, positive, negative):
+        from comfy.sample import broadcast_cond
+        from comfy.samplers import (resolve_cond_masks, calculate_start_end_timesteps,
+                                            create_cond_with_same_area_if_none, pre_run_control,
+                                            apply_empty_x_to_equal_area, encode_adm)
+        noise = getattr(self.model_k, "noise", opts.noise)
+        if not hasattr(self, "device"):
+            self.device = devices.device
+        device = self.device
 
-    Originally from `sd.py`: `encode_from_tokens()`
-    '''
-    ret = None
-    if "SDXL" in type(clip.cond_stage_model).__name__:
-        encode_token_weights_orig_g = clip.cond_stage_model.clip_g.encode_token_weights
-        encode_token_weights_orig_l = clip.cond_stage_model.clip_l.encode_token_weights
+        positive = broadcast_cond(positive, noise.shape[0], device)
+        negative = broadcast_cond(negative, noise.shape[0], device)
+
+        positive = positive[:]
+        negative = negative[:]
+
+        resolve_cond_masks(positive, noise.shape[2], noise.shape[3], self.device)
+        resolve_cond_masks(negative, noise.shape[2], noise.shape[3], self.device)
+
+        calculate_start_end_timesteps(self.model_wrap, negative)
+        calculate_start_end_timesteps(self.model_wrap, positive)
+
+        #make sure each cond area has an opposite one with the same area
+        for c in positive:
+            create_cond_with_same_area_if_none(negative, c)
+        for c in negative:
+            create_cond_with_same_area_if_none(positive, c)
+
+        pre_run_control(self.model_wrap, negative + positive)
+
+        apply_empty_x_to_equal_area(list(filter(lambda c: c[1].get('control_apply_to_uncond', False) == True, positive)), negative, 'control', lambda cond_cnets, x: cond_cnets[x])
+        apply_empty_x_to_equal_area(positive, negative, 'gligen', lambda cond_cnets, x: cond_cnets[x])
+
+        if self.model.is_adm():
+            positive = encode_adm(self.model, positive, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "positive")
+            negative = encode_adm(self.model, negative, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "negative")
+        return (positive, negative)
+
+# =======================================================================================
+
+def set_model_k(self: KSampler):
+    self.model_denoise = CFGNoisePredictor(self.model, self) # main change
+    if ((getattr(self.model, "parameterization", "") == "v") or
+        (getattr(self.model, "model_type", -1) == model_base.ModelType.V_PREDICTION)):
+        self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)
+        self.model_wrap.parameterization = getattr(self.model, "parameterization", "v")
+    else:
+        self.model_wrap = CompVisDenoiser(self.model_denoise, quantize=True)
+        self.model_wrap.parameterization = getattr(self.model, "parameterization", "eps")
+    self.model_k = KSamplerX0Inpaint(self.model_wrap)
+
+class SDKSampler(comfy.samplers.KSampler):
+    def __init__(self, *args, **kwargs):
+        super(SDKSampler, self).__init__(*args, **kwargs)
+        if opts.use_CFGDenoiser:
+            set_model_k(self)
+
+# Custom KSampler using CFGDenoiser. Unused.
+class smz_SDKSampler(nodes.KSampler):
+    @classmethod
+    def INPUT_TYPES(s):
+        it = super(smz_SDKSampler, s).INPUT_TYPES()
+        if not it.get('hidden'):
+            it['hidden'] = {}
+        it['hidden']['use_CFGDenoiser'] = ([False, True],{"default": True})
+        return it
+    def sample(self, use_CFGDenoiser=True, *args, **kwargs):
+        opts.data['use_CFGDenoiser'] = use_CFGDenoiser
+        KSampler_orig = comfy.samplers.KSampler
+        ret = None
         try:
-            clip.cond_stage_model.clip_g.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model.clip_g)
-            clip.cond_stage_model.clip_l.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model.clip_l)
-            ret = clip.encode_from_tokens(tokens, return_pooled)
-            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_orig_g
-            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_orig_l
-        except Exception as error:
-            clip.cond_stage_model.clip_g.encode_token_weights = encode_token_weights_orig_g
-            clip.cond_stage_model.clip_l.encode_token_weights = encode_token_weights_orig_l
-            raise error
-    else:
-        encode_token_weights_orig = clip.cond_stage_model.encode_token_weights
-        try:
-            clip.cond_stage_model.encode_token_weights = MethodType(encode_token_weights_customized, clip.cond_stage_model)
-            ret = clip.encode_from_tokens(tokens, return_pooled)
-            clip.cond_stage_model.encode_token_weights = encode_token_weights_orig
-        except Exception as error:
-            clip.cond_stage_model.encode_token_weights = encode_token_weights_orig
-            raise error
-
-    return ret
-
-def encode_token_weights_customized(self: comfy.sd1_clip.SD1ClipModel|FrozenCLIPEmbedderWithCustomWordsBase, token_weight_pairs):
-    if isinstance(self, comfy.sd1_clip.SD1ClipModel):
-        to_encode = list(self.empty_tokens)
-    else:
-        to_encode = list(self.wrapped.empty_tokens)
-    for x in token_weight_pairs:
-        tokens = list(map(lambda a: a[0], x))
-        weights = list(map(lambda a: a[1], x))
-        to_encode.append(tokens)
-
-    out, pooled = self.encode(to_encode)
-    zw = torch.asarray(weights).to(device=out.device)
-
-    z_empty = out[0:1]
-    if pooled.shape[0] > 1:
-        first_pooled = pooled[1:2]
-    else:
-        first_pooled = pooled[0:1]
-
-    output = []
-    for k in range(1, out.shape[0]):
-        # 3D -> 2D
-        z = out[k:k+1]
-        batch_multipliers = zw[k:k+1]
-        # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
-        if opts.prompt_mean_norm:
-            original_mean = z.mean()
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-            new_mean = z.mean()
-            z = z * (original_mean / new_mean)
-        else:
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-            # for i in range(len(z)):
-            #     for j in range(len(z[i])):
-            #         weight = token_weight_pairs[k - 1][j][1]
-            #         z[i][j] = (z[i][j] - z_empty[0][j]) * weight + z_empty[0][j]
-        output.append(z)
-
-    if (len(output) == 0):
-        return z_empty, first_pooled
-    return torch.cat(output, dim=-2).cpu(), first_pooled.cpu()
-
-
-# tokenize then encode
-# from prompt_parser.py: get_learned_conditioning()
-def get_learned_conditioning_custom(model: FrozenCLIPEmbedderWithCustomWordsBase, prompts: List[str], steps = 1, return_pooled=True, multi=False, with_pooled=None):
-    first_pooled = None
-    final_cond = None
-
-    if with_pooled != None:
-        first_pooled = with_pooled['pooled_output']
-        schedules = with_pooled['schedules_']
-        step = with_pooled['step_']
-        conds_list = [[(0, 1.0)]]
-        final_cond = reconstruct_schedules(schedules, step)
-        if type(final_cond) == tuple:
-            conds_list, final_cond = final_cond
-        final_cond.cond = schedules
-        first_pooled.cond = schedules
-        with_pooled['conds_list_'] = conds_list
-        return (final_cond, first_pooled) if return_pooled else final_cond
-
-    # rewrite the functions here just to extract pooled
-
-    if multi:
-        res_indexes, prompt_flat_list, _prompt_indexes = prompt_parser.get_multicond_prompt_list(prompts)
-        prompts = prompt_flat_list
-        # learned_conditioning = prompt_parser.get_learned_conditioning(model, prompt_flat_list, steps)
-    # The code below is from prompt_parser.get_learned_conditioning
-    res = []
-    prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules(prompts, steps)
-    cache = {}
-    for prompt, prompt_schedule in zip(prompts, prompt_schedules):
-        # debug(f'Prompt schedule: {prompt_schedule}')
-        cached = cache.get(prompt, None)
-        if cached is not None:
-            res.append(cached)
-            continue
-        texts = prompt_parser.SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
-        # conds = model.get_learned_conditioning(texts)
-        conds = model.forward(texts)
-        if opts.return_batch_chunks and conds is not torch.Tensor:
-            # It's safe to return early here since our input text is always one
-            return conds
-        if first_pooled == None:
-            # first_pooled = conds.pooled
-            if conds.pooled.shape[0] > 1:
-                first_pooled = conds.pooled[1:2]
-            else:
-                first_pooled = conds.pooled[0:1]
-        cond_schedule = []
-        for i, (end_at_step, _) in enumerate(prompt_schedule):
-            if isinstance(conds, dict):
-                cond = {k: v[i] for k, v in conds.items()}
-            else:
-                cond = conds[i]
-
-            cond_schedule.append(prompt_parser.ScheduledPromptConditioning(end_at_step, cond))
-
-        cache[prompt] = cond_schedule
-        res.append(cond_schedule)
-    # first_pooled = first_pooled.cpu()
-    if multi:
-        res_mc = []
-        learned_conditioning = res
-        for indexes in res_indexes:
-            res_mc.append([prompt_parser.ComposableScheduledPromptConditioning(learned_conditioning[i], weight) for i, weight in indexes])
-        schedules = prompt_parser.MulticondLearnedConditioning(shape=(len(prompts),), batch=res_mc)
-        conds_list, final_cond = prompt_parser.reconstruct_multicond_batch(schedules, 0)
-        # final_cond = final_cond.cpu()
-        final_cond.cond = schedules
-        first_pooled.cond = schedules # for sdxl
-    else:
-        schedules=res
-        final_cond = prompt_parser.reconstruct_cond_batch(schedules, 0)
-        # final_cond = final_cond.cpu()
-        final_cond.cond = schedules
-        first_pooled.cond = schedules # for sdxl
-
-    return (final_cond, first_pooled) if return_pooled else final_cond
+            comfy.samplers.KSampler = SDKSampler
+            ret = super(smz_SDKSampler, self).sample(*args, **kwargs)
+            comfy.samplers.KSampler = KSampler_orig
+        except Exception as err:
+            comfy.samplers.KSampler = KSampler_orig
+            raise err
+        return ret
 
 # =======================================================================================
 
@@ -955,207 +767,6 @@ def inject_code(original_func, data):
 
     # Return the modified function
     return modified_function
-
-# ========================================================================
-
-def txt2img_image_conditioning(sd_model, x, width=None, height=None):
-    return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
-    # if sd_model.model.conditioning_key in {'hybrid', 'concat'}: # Inpainting models
-    #     # The "masked-image" in this case will just be all zeros since the entire image is masked.
-    #     image_conditioning = torch.zeros(x.shape[0], 3, height, width, device=x.device)
-    #     image_conditioning = sd_model.get_first_stage_encoding(sd_model.encode_first_stage(image_conditioning))
-    #     # Add the fake full 1s mask to the first dimension.
-    #     image_conditioning = torch.nn.functional.pad(image_conditioning, (0, 0, 0, 0, 1, 0), value=1.0)
-    #     image_conditioning = image_conditioning.to(x.dtype)
-    #     return image_conditioning
-    # elif sd_model.model.conditioning_key == "crossattn-adm": # UnCLIP models
-    #     return x.new_zeros(x.shape[0], 2*sd_model.noise_augmentor.time_embed.dim, dtype=x.dtype, device=x.device)
-    # else:
-    #     # Dummy zero conditioning if we're not using inpainting or unclip models.
-    #     # Still takes up a bit of memory, but no encoder call.
-    #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
-    #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
-
-def process_conds_comfy(self, positive, negative):
-        from comfy.sample import broadcast_cond
-        from comfy.samplers import (resolve_cond_masks, calculate_start_end_timesteps,
-                                            create_cond_with_same_area_if_none, pre_run_control,
-                                            apply_empty_x_to_equal_area, encode_adm)
-        noise = getattr(self.model_k, "noise", opts.noise)
-        if not hasattr(self, "device"):
-            self.device = devices.device
-        device = self.device
-
-        positive = broadcast_cond(positive, noise.shape[0], device)
-        negative = broadcast_cond(negative, noise.shape[0], device)
-
-        positive = positive[:]
-        negative = negative[:]
-
-        resolve_cond_masks(positive, noise.shape[2], noise.shape[3], self.device)
-        resolve_cond_masks(negative, noise.shape[2], noise.shape[3], self.device)
-
-        calculate_start_end_timesteps(self.model_wrap, negative)
-        calculate_start_end_timesteps(self.model_wrap, positive)
-
-        #make sure each cond area has an opposite one with the same area
-        for c in positive:
-            create_cond_with_same_area_if_none(negative, c)
-        for c in negative:
-            create_cond_with_same_area_if_none(positive, c)
-
-        pre_run_control(self.model_wrap, negative + positive)
-
-        apply_empty_x_to_equal_area(list(filter(lambda c: c[1].get('control_apply_to_uncond', False) == True, positive)), negative, 'control', lambda cond_cnets, x: cond_cnets[x])
-        apply_empty_x_to_equal_area(positive, negative, 'gligen', lambda cond_cnets, x: cond_cnets[x])
-
-        if self.model.is_adm():
-            positive = encode_adm(self.model, positive, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "positive")
-            negative = encode_adm(self.model, negative, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "negative")
-        return (positive, negative)
-
-def reconstruct_schedules(schedules, step):
-    create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
-    reconstruct_fn = create_reconstruct_fn(schedules)
-    return reconstruct_fn(schedules, step)
-
-class CFGNoisePredictor(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.ksampler = self._find_outer_instance()
-        self.step = 0
-        self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
-        self.inner_model = CFGDenoiser(model.apply_model)
-        self.inner_model.num_timesteps = model.num_timesteps
-        self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
-        self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
-        self.alphas_cumprod = model.alphas_cumprod
-        self.cond_orig = None
-        self.uncond_orig = None
-        self.c_adm = None
-        self.is_prompt_editing_u = False
-        self.is_prompt_editing_c = False
-
-    def _find_outer_instance(self):
-        import inspect
-        frame = inspect.currentframe()
-        while frame:
-            if 'self' in frame.f_locals and isinstance(frame.f_locals['self'], comfy.samplers.KSampler):
-                return frame.f_locals['self']
-            frame = frame.f_back
-        return None
-
-    def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        if not (cond[0][1].get('from_smZ', False) and uncond[0][1].get('from_smZ', False)):
-            return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
-
-        if self.step == 0:
-            self.init_cond = cond
-            self.init_uncond = uncond
-            self.is_prompt_editing_c = is_prompt_editing(getattr(cond[0][1]['pooled_output'], 'schedules', None))
-            self.is_prompt_editing_u = is_prompt_editing(getattr(uncond[0][1]['pooled_output'], 'schedules', None))
-        else:
-            cond = self.init_cond
-            cond_bak = cond
-            if self.is_prompt_editing_c:
-                # schedules = self.init_cond[0][1]['pooled_output'].schedules
-                # multi_conditioning = self.init_cond[0][1]['params']['multi_conditioning']
-                # self.clip.cond_stage_model.encode_token_weights = partial(self.clip.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
-                # steps = self.init_cond[0][1]['params']['steps']
-                params = self.init_cond[0][1]['params']
-                params['step'] = self.step
-                cond = run(with_pooled=self.init_cond[0][1], **params)[0] # params includes steps
-
-                # encode_fn = self.init_cond[0][1]['encode_fn']
-                # cond = encode_fn(self.init_cond[0][1]['params']['steps'], self.init_cond[0][1])[0]
-                # cond = encode_fn(self.ksampler.steps, self.init_cond[0][1])[0]
-
-                # schedules = getattr(cond[0][1]['pooled_output'], 'schedules', None)
-                # cond = reconstruct_schedules(schedules, self.step)
-                # if type(cond) == tuple:
-                #     conds_list, cond = cond
-                # cond = [[cond, cond_bak[0][1]]]
-            # conds_list = [[(0, 1.0)]]
-            
-            uncond = self.init_uncond
-            uncond_bak = uncond
-            if self.is_prompt_editing_u:
-                params = self.init_uncond[0][1]['params']
-                params['step'] = self.step
-                uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]
-                # encode_fn = self.init_uncond[0][1]['encode_fn']
-                # uncond = encode_fn(self.init_uncond[0][1]['params']['steps'], self.init_uncond[0][1])[0]
-                # uncond = encode_fn(self.ksampler.steps, self.init_uncond[0][1])[0]
-                # schedules = getattr(uncond[0][1]['pooled_output'], 'schedules', None)
-                # uncond = reconstruct_schedules(schedules, self.step)
-                # if type(uncond) == tuple:
-                #     _, uncond = uncond
-                # uncond = [[uncond, uncond_bak[0][1]]]
-
-            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item()):
-                cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
-            
-        co = cond[0][0]
-        unc = uncond[0][0]
-        if cond[0][1].get('from_smZ', False) and "comfy" != cond[0][1].get('params',{}).get('parser', 'comfy'):
-            co = expand(co, unc)
-        if uncond[0][1].get('from_smZ', False) and "comfy" != uncond[0][1].get('params',{}).get('parser', 'comfy'):
-            unc = expand(unc, co)
-
-
-        if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):
-            if cond[0][1].get("adm_encoded", None) != None and self.c_adm == None:
-                self.c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
-            x.c_adm = self.c_adm
-            conds_list = cond[0][1]['pooled_output'].conds_list
-            cond = (conds_list, co)
-            image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
-        else:
-            cond = [[co, cond[0][1]]]
-            uncond = [[unc, uncond[0][1]]]
-            out = self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
-        self.step += 1
-        return out
-
-def set_model_k(self: KSampler):
-    self.model_denoise = CFGNoisePredictor(self.model, self) # main change
-    if ((getattr(self.model, "parameterization", "") == "v") or
-        (getattr(self.model, "model_type", -1) == model_base.ModelType.V_PREDICTION)):
-        self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)
-        self.model_wrap.parameterization = getattr(self.model, "parameterization", "v")
-    else:
-        self.model_wrap = CompVisDenoiser(self.model_denoise, quantize=True)
-        self.model_wrap.parameterization = getattr(self.model, "parameterization", "eps")
-    self.model_k = KSamplerX0Inpaint(self.model_wrap)
-
-class SDKSampler(comfy.samplers.KSampler):
-    def __init__(self, *args, **kwargs):
-        super(SDKSampler, self).__init__(*args, **kwargs)
-        if opts.use_CFGDenoiser:
-            set_model_k(self)
-
-# Custom KSampler using CFGDenoiser. Unused.
-class smz_SDKSampler(nodes.KSampler):
-    @classmethod
-    def INPUT_TYPES(s):
-        it = super(smz_SDKSampler, s).INPUT_TYPES()
-        if not it.get('hidden'):
-            it['hidden'] = {}
-        it['hidden']['use_CFGDenoiser'] = ([False, True],{"default": True})
-        return it
-    def sample(self, use_CFGDenoiser=True, *args, **kwargs):
-        opts.data['use_CFGDenoiser'] = use_CFGDenoiser
-        backup_KSampler = comfy.samplers.KSampler
-        ret = None
-        try:
-            comfy.samplers.KSampler = SDKSampler
-            ret = super(smz_SDKSampler, self).sample(*args, **kwargs)
-            comfy.samplers.KSampler = backup_KSampler
-        except Exception as err:
-            comfy.samplers.KSampler = backup_KSampler
-            raise err
-        return ret
 
 # ========================================================================
 

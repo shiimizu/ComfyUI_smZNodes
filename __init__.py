@@ -70,7 +70,7 @@ from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
 
 # add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
-from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, sample_custom, CFGNoisePredictor
+from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
 
 add_sample_dpmpp_2m_alt()
 import comfy.sample
@@ -82,8 +82,6 @@ payload = [{
                 from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
                 if smZ_opts.disable_max_denoise:
                     max_denoise = False
-                # from ComfyUI_smZNodes.smZNodes import set_model_k
-                # set_model_k(self)
 """
 },
 {

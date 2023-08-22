@@ -1,15 +1,13 @@
 from .modules import prompt_parser, devices, shared
 from .modules.shared import opts
 from .modules.sd_hijack import model_hijack
-from .smZNodes import encode_from_texts, expand, run, LazyCond
-from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
-from nodes import CLIPTextEncode, MAX_RESOLUTION
+from .smZNodes import run, LazyCond
+from nodes import MAX_RESOLUTION
 import comfy.sd
 import comfy.model_management
 import torch
 import comfy.samplers
 import comfy.sample
-from functools import partial
 
 class smZ_CLIPTextEncode:
     @classmethod

@@ -22,11 +22,48 @@ This means you can reproduce the same images generated from `stable-diffusion-we
 
 Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser.
 
-## Installation
-Navigate to the **_ComfyUI/custom_nodes_** directory, and run:
 
-```
+## Installation
+
+Three methods are available for installation:
+
+1. Load via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager)
+2. Clone the repository directly into the extensions directory.
+3. Download the project manually.
+
+
+### Load via ComfyUI Manager
+
+
+<div align="center">
+    <img width="1207" alt="ComfyUI Manager" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/310d934d-c8db-4c4a-af2a-7a26938eb751">
+    <p>Install via ComfyUI manager</p>
+</div>
+
+### Clone Repository
+
+```shell
+cd path/to/your/ComfyUI/custom_nodes
 git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
+```
+
+### Download Manually
+
+1. Download the project archive from [here](https://github.com/shiimizu/ComfyUI_smZNodes/archive/refs/heads/main.zip).
+2. Extract the downloaded zip file.
+3. Move the extracted files to `path/to/your/ComfyUI/custom_nodes`.
+4. Restart ComfyUI
+
+The folder structure should resemble: `path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes`.
+
+
+## Update
+
+To update the extension, update via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) or pull the latest changes from the repository:
+
+```shell
+cd path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes
+git pull
 ```
 
 ## Comparisons
@@ -43,7 +80,7 @@ Image slider links:
 
 ## Options
 
-|Option|Explanation|
+|Name|Description|
 | --- | --- |
 | `parser` | The parser selected to parse prompts into tokens and then transformed (encoded) into embeddings. Taken from [`automatic`](https://github.com/vladmandic/automatic/discussions/99#discussioncomment-5931014). |
 | `mean_normalization` | Whether to take the mean of your prompt weights. It's `true` by default on `stable-diffusion-webui`.<br>This is implemented according to `stable-diffusion-webui`. (They say that it's probably not the correct way to take the mean.) |
@@ -56,7 +93,7 @@ Image slider links:
 
 <br>
 
-| Parser            | Explanation                                                                      |
+| Parser            | Description                                                                      |
 | ----------------- | -------------------------------------------------------------------------------- |
 | `comfy`           | The default way `ComfyUI` handles everything                                     |
 | `comfy++`         | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does, allowing to take the mean as they do. |
@@ -69,7 +106,7 @@ Image slider links:
 > Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
 > **Warning**  
-> Hypernetowork syntax (`<lora:name:1.0>`) is not suppprted and textual inversion embeddings use ComfyUI's syntax: `(embedding:name:1.0)`
+> Hypernetwork syntax (`<lora:name:1.0>`) is not suppprted and textual inversion embeddings use ComfyUI's syntax: `(embedding:name:1.0)`
 
 ## Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion. Or if you insist on using the GPU, try using the KSampler GPU node. 

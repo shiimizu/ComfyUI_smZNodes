@@ -438,20 +438,38 @@ class SDXLRefinerClipModel(comfy.sdxl_clip.SDXLRefinerClipModel, PopulateVars):
             g_pooled.schedules = {"g": g_pooled.schedules}
         return (g_out, g_pooled)
 
+def is_prompt_editing(schedules):
+    if schedules == None: return False
+    if not isinstance(schedules, dict):
+        schedules = {'g': schedules}
+    for k,v in schedules.items():
+        if type(v) == list:
+            if len(v[0]) != 1: return True
+        else:
+            if len(v.batch[0][0].schedules) != 1: return True
+    return False
+
 def sample_custom(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, noise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
     params = locals()
     for idx, orig in enumerate([positive,negative]):
         if orig[0][1].get('from_smZ', False):
             if "comfy" not in orig[0][1]['params']['parser']:
+                global opts
                 cond_text = 'positive' if idx == 0 else 'negative'
                 cid_orig = str(id(orig[0][1]['params']['clip']))
                 orig[0][1]['params']['steps'] = steps
-                global opts
                 conds_cache_cond = opts.conds_cache[cond_text].get(cid_orig, {})
-                if conds_cache_cond != {} and conds_cache_cond[0][1]['params'] == orig[0][1]['params']:
-                    # print("Unchanged",cond_text)
-                    params[cond_text] = conds_cache_cond
-                    continue
+                if conds_cache_cond != {}:
+                    is_prompt_editing_ = False
+                    schedules = getattr(conds_cache_cond[0][1]['pooled_output'], 'schedules', None)
+                    if schedules!= None:
+                        is_prompt_editing_ = is_prompt_editing(schedules)
+                    conds_cache_cond[0][1]['params'].pop('step', None)
+                    orig[0][1]['params'].pop('step', None)
+                    if conds_cache_cond[0][1]['params'] == orig[0][1]['params'] or not is_prompt_editing_:
+                        # print("Unchanged",cond_text, is_prompt_editing_)
+                        params[cond_text] = conds_cache_cond
+                        continue
                 
                 # re-encode with total number of steps
                 # encode_fn = orig[0][1]['encode_fn']
@@ -473,7 +491,7 @@ from nodes import CLIPTextEncode
 def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                multi_conditioning, use_old_emphasis_implementation,
                use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
-               crop_h, target_width, target_height, text_g, text_l, steps=0, with_pooled=None):
+               crop_h, target_width, target_height, text_g, text_l, steps=0, step=0, with_pooled=None):
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
@@ -555,11 +573,11 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             cond_stage_model_orig = clip_clone.cond_stage_model
             if with_pooled == None:
                 clip_clone.cond_stage_model = get_custom_cond_stage_model()
-                clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
             else:
                 clip_clone.load_model_orig = clip_clone.load_model
                 clip_clone.load_model = lambda x=None:x
                 clip_clone.cond_stage_model = with_pooled['pooled_output'].cond_stage_model
+            clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, current_step=step, multi=multi_conditioning)
             cond, pooled = clip_clone.encode_from_tokens(tokens, True)
             if with_pooled == None:
                 pooled.cond_stage_model = clip_clone.cond_stage_model
@@ -973,6 +991,8 @@ class CFGNoisePredictor(torch.nn.Module):
         self.cond_orig = None
         self.uncond_orig = None
         self.c_adm = None
+        self.is_prompt_editing_u = False
+        self.is_prompt_editing_c = False
 
     def _find_outer_instance(self):
         import inspect
@@ -990,17 +1010,18 @@ class CFGNoisePredictor(torch.nn.Module):
         if self.step == 0:
             self.init_cond = cond
             self.init_uncond = uncond
-            # self.clip = self.init_cond[0][1]['params']['clip']
-            # self.clip.cond_stage_model = SDXLClipModel().wrap(self.clip.cond_stage_model, self.clip.tokenizer)
+            self.is_prompt_editing_c = is_prompt_editing(getattr(cond[0][1]['pooled_output'], 'schedules', None))
+            self.is_prompt_editing_u = is_prompt_editing(getattr(uncond[0][1]['pooled_output'], 'schedules', None))
         else:
             cond = self.init_cond
             cond_bak = cond
-            if cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']:
+            if self.is_prompt_editing_c and cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']:
                 # schedules = self.init_cond[0][1]['pooled_output'].schedules
                 # multi_conditioning = self.init_cond[0][1]['params']['multi_conditioning']
                 # self.clip.cond_stage_model.encode_token_weights = partial(self.clip.cond_stage_model.encode_token_weights, steps=steps, multi=multi_conditioning)
-                steps = self.init_cond[0][1]['params']['steps']
+                # steps = self.init_cond[0][1]['params']['steps']
                 params = self.init_cond[0][1]['params']
+                params['step'] = self.step
                 cond = run(with_pooled=self.init_cond[0][1], **params)[0] # params includes steps
 
                 # encode_fn = self.init_cond[0][1]['encode_fn']
@@ -1013,12 +1034,12 @@ class CFGNoisePredictor(torch.nn.Module):
                 #     conds_list, cond = cond
                 # cond = [[cond, cond_bak[0][1]]]
             # conds_list = [[(0, 1.0)]]
-
+            
             uncond = self.init_uncond
             uncond_bak = uncond
-            if uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser']:
-                steps = self.init_uncond[0][1]['params']['steps']
+            if self.is_prompt_editing_u and uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser']:
                 params = self.init_uncond[0][1]['params']
+                params['step'] = self.step
                 uncond = run(with_pooled=self.init_uncond[0][1], **params)[0]
                 # encode_fn = self.init_uncond[0][1]['encode_fn']
                 # uncond = encode_fn(self.init_uncond[0][1]['params']['steps'], self.init_uncond[0][1])[0]
@@ -1029,16 +1050,14 @@ class CFGNoisePredictor(torch.nn.Module):
                 #     _, uncond = uncond
                 # uncond = [[uncond, uncond_bak[0][1]]]
 
-            # if ((cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1]['params']['parser']) or
-            #     (uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1]['params']['parser'])):
-            if not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item() :
+            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(cond_bak[0][0] == cond[0][0]).item() or not torch.all(uncond_bak[0][0] == uncond[0][0]).item()):
                 cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
             
         co = cond[0][0]
         unc = uncond[0][0]
-        if cond[0][1].get('from_smZ', False) and "comfy" not in cond[0][1].get('params',{}).get('parser', 'comfy'):
+        if cond[0][1].get('from_smZ', False) and "comfy" != cond[0][1].get('params',{}).get('parser', 'comfy'):
             co = expand(co, unc)
-        if uncond[0][1].get('from_smZ', False) and "comfy" not in uncond[0][1].get('params',{}).get('parser', 'comfy'):
+        if uncond[0][1].get('from_smZ', False) and "comfy" != uncond[0][1].get('params',{}).get('parser', 'comfy'):
             unc = expand(unc, co)
 
 

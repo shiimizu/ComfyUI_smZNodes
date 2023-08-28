@@ -106,7 +106,7 @@ Image slider links:
 > Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
 > **Warning**  
-> Hypernetwork syntax (`<lora:name:1.0>`) is not suppprted and textual inversion embeddings use ComfyUI's syntax: `(embedding:name:1.0)`
+> Hypernetwork syntax (`<lora:name:1.0>`) is not suppprted.
 
 ## Tips to get reproducible results on both UIs
 - Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion. Or if you insist on using the GPU, try using the KSampler GPU node. 

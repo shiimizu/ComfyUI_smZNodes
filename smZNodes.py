@@ -13,7 +13,7 @@ from .modules.textual_inversion.textual_inversion import Embedding
 import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
-from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important
+from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
 from comfy.sdxl_clip import SDXLClipGTokenizer
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
 from nodes import CLIPTextEncode
@@ -29,6 +29,8 @@ import functools
 import tempfile
 import importlib
 import sys
+import os
+import re
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -77,7 +79,7 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
                 self.token_mults[ident] = mult
 
     def tokenize_line(self, line):
-        parse_and_register_embeddings(self, line)
+        line = parse_and_register_embeddings(self, line)
         return super().tokenize_line(line)
 
     def encode(self, tokens):
@@ -114,7 +116,7 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         return tokenized
 
 
-class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, SD1Tokenizer, PopulateVars):
+class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, PopulateVars):
     '''
     Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
     '''
@@ -180,16 +182,14 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         return z
 
     def tokenize_line(self, line):
-        parse_and_register_embeddings(self, line) # register embeddings, discard return
+        line = parse_and_register_embeddings(self, line)
         return super().tokenize_line(line)
 
     def tokenize(self, texts):
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
         return tokenized
 
-# This function has been added to apply embeddings
-# from sd1_clip.py @ tokenize_with_weights()
-def parse_and_register_embeddings(self, text: str, return_word_ids=False):
+def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=False):
     '''
     Takes a prompt and converts it to a list of (token, weight, word id) elements.
     Tokens can both be integer tokens and pre computed CLIP tensors.
@@ -202,52 +202,120 @@ def parse_and_register_embeddings(self, text: str, return_word_ids=False):
         pad_token = 0
 
     text = escape_important(text)
-    # parsed_weights = token_weights(text, 1.0)
-    parsed = prompt_parser.parse_prompt_attention(text)
-    parsed_weights = [tuple(tw) for tw in parsed]
+    parsed_weights = token_weights(text, 1.0)
+
+    embs = get_valid_embeddings(self.embedding_directory) if self.embedding_directory is not None else []
+    embs_str = '|'.join(embs)
+    embs_str = embs_str + '|' if embs_str else ''
+    emb_re = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?".format(embs_str)
+    emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
 
     #tokenize words
     tokens = []
     for weighted_segment, weight in parsed_weights:
         to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
         to_tokenize = [x for x in to_tokenize if x != ""]
-        # to_tokenize = [x for x in weighted_segment if x != ""]
-
-        tmp=[]
-        # print(word)
         for word in to_tokenize:
-            #if we find an embedding, deal with the embedding
-            emb_idx = word.find(self.embedding_identifier)
-            # word.startswith(self.embedding_identifier)
-            if emb_idx != -1 and self.embedding_directory is not None:
-                embedding_name = word[len(self.embedding_identifier):].strip('\n')
-
-                embedding_name_verbose = word[emb_idx:].strip('\n')
-                embedding_name = word[emb_idx+len(self.embedding_identifier):].strip('\n')
-                embed, leftover = self._try_get_embedding(embedding_name.strip())
-
-                if embed is None:
-                    print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-                else:
-                    embed = embed.to(device=devices.device)
-                    self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name_verbose), self)
-                    if len(embed.shape) == 1:
-                        # tokens.append([(embed, weight)])
-                        tmp += [(embed, weight)]
+            matches = emb_re.finditer(word)
+            last_end = 0
+            for _, match in enumerate(matches, start=1):
+                start=match.start()
+                end=match.end()
+                nw=word[last_end:start]
+                if nw:
+                    tokens.append([(t, weight) for t in self.tokenizer(nw)["input_ids"][1:-1]])
+                if (embedding_name := match.group(2)) is not None:
+                    embed, leftover = self._try_get_embedding(embedding_name)
+                    if embed is None:
+                        print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
-                        # tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
-                        tmp += [(embed[x], weight) for x in range(embed.shape[0])]
-                #if we accidentally have leftover text, continue parsing using leftover, else move on to next word
-                if leftover != "":
-                    word = leftover
+                        # print(f'using embedding:{embedding_name}')
+                        if len(embed.shape) == 1:
+                            tokens.append([(embed, weight)])
+                        else:
+                            tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
+                last_end = end
+            nw = word[last_end:]
+            if nw:
+                tokens.append([(t, weight) for t in self.tokenizer(nw)["input_ids"][1:-1]])
+
+    #reshape token array to CLIP input size
+    batched_tokens = []
+    batch = [(self.start_token, 1.0, 0)]
+    batched_tokens.append(batch)
+    for i, t_group in enumerate(tokens):
+        #determine if we're going to try and keep the tokens in a single batch
+        is_large = len(t_group) >= self.max_word_length
+
+        while len(t_group) > 0:
+            if len(t_group) + len(batch) > self.max_length - 1:
+                remaining_length = self.max_length - len(batch) - 1
+                #break word in two and add end token
+                if is_large:
+                    batch.extend([(t,w,i+1) for t,w in t_group[:remaining_length]])
+                    batch.append((self.end_token, 1.0, 0))
+                    t_group = t_group[remaining_length:]
+                #add end token and pad
                 else:
-                    continue
-            #parse word
-            # tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][1:-1]])
-            tmp += [(word, weight)]
-            # tokens.append(tmp)
-            tokens += tmp
-    return tokens
+                    batch.append((self.end_token, 1.0, 0))
+                    batch.extend([(pad_token, 1.0, 0)] * (remaining_length))
+                #start new batch
+                batch = [(self.start_token, 1.0, 0)]
+                batched_tokens.append(batch)
+            else:
+                batch.extend([(t,w,i+1) for t,w in t_group])
+                t_group = []
+
+    #fill last batch
+    batch.extend([(self.end_token, 1.0, 0)] + [(pad_token, 1.0, 0)] * (self.max_length - len(batch) - 1))
+
+    if not return_word_ids:
+        batched_tokens = [[(t, w) for t, w,_ in x] for x in batched_tokens]
+
+    return batched_tokens
+
+def get_valid_embeddings(embedding_directory):
+    from  builtins import any as b_any
+    exts = ['.safetensors', '.pt', '.bin']
+    if isinstance(embedding_directory, str):
+        embedding_directory = [embedding_directory]
+    embedding_directory = expand_directory_list(embedding_directory)
+    embs = []
+    for embd in embedding_directory:
+        for root, dirs, files in os.walk(embd, topdown=False):
+            for name in files:
+                if not b_any(x in os.path.splitext(name)[1] for x in exts): continue
+                n = os.path.basename(name)
+                for ext in exts: n=n.removesuffix(ext)
+                embs.append(re.escape(n))
+    return embs
+
+def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):
+    from  builtins import any as b_any
+    def inverse_substring(s, start, end, offset = 0):
+        return s[:start-offset] + s[end-offset:]
+
+    embs = get_valid_embeddings(self.wrapped.tokenizer_parent.embedding_directory)
+    embs_str = '|'.join(embs)
+    emb_re = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?".format(embs_str + '|' if embs_str else '')
+    emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
+    matches = emb_re.finditer(text)
+    offset = 0
+    for matchNum, match in enumerate(matches, start=1):
+        found=False
+        if (embedding_name := match.group(2)):
+            embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
+            if embed is not None:
+                found=True
+                # print(f'using embedding:{embedding_name}')
+                if embed.device != devices.device:
+                    embed = embed.to(device=devices.device)
+                self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name), self)
+        if not found:
+            print(f"warning, embedding:{embedding_name} does not exist, ignoring")
+            text = inverse_substring(text, match.start(), match.end(), offset)
+            offset += len(embedding_name)
+    return text.replace('embedding:', '')
 
 def expand(t1, t2, empty_t=None, with_zeros=False):
     if t1.shape[1] < t2.shape[1]:
@@ -480,21 +548,25 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             "target_height": target_height, "text_g": text_g, "text_l": text_l
         }
     pooled={}
+    if not hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
+        SD1Tokenizer.tokenize_with_weights_orig = SD1Tokenizer.tokenize_with_weights
     if parser == "comfy":
+        SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
         clip_model_type_name = type(clip.cond_stage_model).__name__ 
         if with_SDXL and is_sdxl:
             if clip_model_type_name== "SDXLClipModel":
                 out = CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
                 out[0][0][1]['aesthetic_score'] = sdxl_conds['aesthetic_score']
-                return out
             elif clip_model_type_name == "SDXLRefinerClipModel":
                 out = CLIPTextEncodeSDXLRefiner().encode(clip, ascore, width, height, text)
                 for item in ['aesthetic_score', 'width', 'height', 'text_g', 'text_l']:
                     sdxl_conds.pop(item)
                 out[0][0][1].update(sdxl_conds)
-                return out
         else:
-            return CLIPTextEncode().encode(clip, text)
+            out = CLIPTextEncode().encode(clip, text)
+        if hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
+            SD1Tokenizer.tokenize_with_weights = SD1Tokenizer.tokenize_with_weights_orig
+        return out
     else:
         texts = [text]
         create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
@@ -523,7 +595,10 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         if with_pooled != None:
             tokens = with_pooled['pooled_output'].schedules
         if parser == "comfy++":
+            SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
             tokens = clip_clone.tokenize(text)
+            if hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
+                SD1Tokenizer.tokenize_with_weights = SD1Tokenizer.tokenize_with_weights_orig
         cond = pooled = None
 
         # Because of prompt editing, we need the total number of steps

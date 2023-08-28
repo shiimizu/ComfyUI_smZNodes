@@ -50,6 +50,7 @@ opts.data['enable_emphasis'] = True
 opts.data['use_old_emphasis_implementation'] = False
 opts.data['disable_nan_check'] = True
 opts.data['pad_cond_uncond'] = False
+opts.data['s_min_uncond'] = 0.0
 opts.data['upcast_sampling'] = False
 opts.data['upcast_attn'] = not args.dont_upcast_attention
 opts.data['textual_inversion_add_hashes_to_infotext']  = False

@@ -559,7 +559,7 @@ class CFGNoisePredictor(torch.nn.Module):
         self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
         self.inner_model = CFGDenoiser(model.apply_model)
         self.inner_model.num_timesteps = model.num_timesteps
-        self.s_min_uncond = 0.0 # getattr(p, 's_min_uncond', 0.0)
+        self.s_min_uncond = opts.s_min_uncond
         self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.alphas_cumprod = model.alphas_cumprod
         self.c_adm = None
@@ -608,7 +608,7 @@ class CFGNoisePredictor(torch.nn.Module):
             conds_list = cond[0][1]['pooled_output'].conds_list
             cond = (conds_list, co)
             image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=0.0, image_cond=image_cond)
+            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
         else:
             cond = [[co, cond[0][1]]]
             uncond = [[unc, uncond[0][1]]]

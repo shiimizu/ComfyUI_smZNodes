@@ -10,14 +10,13 @@ from .shared import opts
 class FrozenOpenCLIPEmbedderWithCustomWords(sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase):
     def __init__(self, wrapped, hijack):
         super().__init__(wrapped, hijack)
-        tokenizer = self.wrapped.tokenizer
-        self.tokenizer = tokenizer
+        self.tokenizer = tokenizer = self.wrapped.tokenizer
 
         self.comma_token = [v for k, v in tokenizer.encoder.items() if k == ',</w>'][0]
         # self.id_start = tokenizer.encoder["<start_of_text>"]
         # self.id_end = tokenizer.encoder["<end_of_text>"]
-        self.id_start = self.wrapped.tokenizer.bos_token_id
-        self.id_end = self.wrapped.tokenizer.eos_token_id
+        self.id_start = tokenizer.bos_token_id
+        self.id_end = tokenizer.eos_token_id
         self.id_pad = 0
 
     def tokenize(self, texts):
@@ -44,14 +43,13 @@ class FrozenOpenCLIPEmbedderWithCustomWords(sd_hijack_clip.FrozenCLIPEmbedderWit
 class FrozenOpenCLIPEmbedder2WithCustomWords(sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase):
     def __init__(self, wrapped, hijack):
         super().__init__(wrapped, hijack)
-        tokenizer = self.wrapped.tokenizer
-        self.tokenizer = tokenizer
+        self.tokenizer = tokenizer = self.wrapped.tokenizer
 
         self.comma_token = [v for k, v in tokenizer.encoder.items() if k == ',</w>'][0]
         # self.id_start = tokenizer.encoder["<start_of_text>"]
         # self.id_end = tokenizer.encoder["<end_of_text>"]
-        self.id_start = self.wrapped.tokenizer.bos_token_id
-        self.id_end = self.wrapped.tokenizer.eos_token_id
+        self.id_start = tokenizer.bos_token_id
+        self.id_end = tokenizer.eos_token_id
         self.id_pad = 0
 
     def tokenize(self, texts):

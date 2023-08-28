@@ -218,12 +218,12 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
         for word in to_tokenize:
             matches = emb_re.finditer(word)
             last_end = 0
+            leftovers=[]
             for _, match in enumerate(matches, start=1):
                 start=match.start()
                 end=match.end()
-                nw=word[last_end:start]
-                if nw:
-                    tokens.append([(t, weight) for t in self.tokenizer(nw)["input_ids"][1:-1]])
+                if (fragment:=word[last_end:start]):
+                    leftovers.append(fragment)
                 if (embedding_name := match.group(2)) is not None:
                     embed, leftover = self._try_get_embedding(embedding_name)
                     if embed is None:
@@ -235,9 +235,10 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
                         else:
                             tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
                 last_end = end
-            nw = word[last_end:]
-            if nw:
-                tokens.append([(t, weight) for t in self.tokenizer(nw)["input_ids"][1:-1]])
+            if (fragment:=word[last_end:]):
+                leftovers.append(fragment)
+                word_new = ''.join(leftovers)
+                tokens.append([(t, weight) for t in self.tokenizer(word_new)["input_ids"][1:-1]])
 
     #reshape token array to CLIP input size
     batched_tokens = []
@@ -315,7 +316,8 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
             text = inverse_substring(text, match.start(), match.end(), offset)
             offset += len(embedding_name)
-    return text.replace('embedding:', '')
+    out = text.replace('embedding:', '')
+    return out
 
 def expand(t1, t2, empty_t=None, with_zeros=False):
     if t1.shape[1] < t2.shape[1]:
@@ -536,7 +538,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             }
     opts.prompt_attention = parser_d.get(parser, "Comfy parser")
 
-    if parser != "comfy":
+    if "comfy" not in parser:
         opts.disable_max_denoise = True
         opts.use_CFGDenoiser = use_CFGDenoiser # unused
 

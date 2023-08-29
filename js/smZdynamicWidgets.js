@@ -1,5 +1,6 @@
 import { app } from "/scripts/app.js";
 
+const id = "CLIP Text Encode++"
 let origProps = {};
 
 const findWidgetByName = (node, name) => node.widgets.find((w) => w.name === name);
@@ -20,11 +21,29 @@ function toggleWidget(node, widget, show = false, suffix = "") {
 
 	const height = show ? Math.max(node.computeSize()[1], origSize[1]) : node.size[1];
 	node.setSize([node.size[0], height]);
-
 }
 
 function widgetLogic(node, widget) {
-    if (widget.name === 'with_SDXL') {
+    if (widget.name === 'parser') {
+		if (widget.value.includes("comfy")) {
+			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'))
+			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'))
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
+		} else {
+			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'), true)
+			// toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'), true)
+			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
+		}
+		if (widget.value === "comfy") {
+            toggleWidget(node, findWidgetByName(node, 'mean_normalization'))
+		} else {
+			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
+		}
+	} else if (widget.name === 'with_SDXL') {
+        if (!widget.init) {
+            widget.init = true
+            toggleWidget(node, findWidgetByName(node, 'with_SDXL'))
+        }
         if (!widget.value) {
 			toggleWidget(node, findWidgetByName(node, 'ascore'))
 			toggleWidget(node, findWidgetByName(node, 'width'))
@@ -46,32 +65,17 @@ function widgetLogic(node, widget) {
 			toggleWidget(node, findWidgetByName(node, 'text_g'), true)
 			toggleWidget(node, findWidgetByName(node, 'text_l'), true)
 		}
-	} else if (widget.name === 'parser') {
-		if (widget.value.includes("comfy")) {
-			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'))
-			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'))
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
-		} else {
-			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'), true)
-			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'), true)
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
-		}
-		if (widget.value === "comfy") {
-			toggleWidget(node, findWidgetByName(node, 'mean_normalization'))
-		} else {
-			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
-		}
 	}
     // Keep showing the SDXL widget if the node is cloned
     if (widget.name === 'ascore') {
         const ascore_widget = findWidgetByName(node, 'ascore')
         const showing = !(ascore_widget.type == "smZhidden" )
-		if (showing)
+        if (showing)
             toggleWidget(node, findWidgetByName(node, 'with_SDXL'), true)
     }
 }
 
-// const getSetWidgets = ['parser', 'mean_normalization', 'multi_conditioning', 'use_old_emphasis_implementation', 'use_CFGDenoiser', 'with_SDXL']
+const widgets = ['parser', 'mean_normalization', 'multi_conditioning', 'use_old_emphasis_implementation', 'use_CFGDenoiser', 'with_SDXL']
 const getSetWidgets = ['parser', 'ascore', 'with_SDXL']
 
 function getSetters(node) {
@@ -79,15 +83,14 @@ function getSetters(node) {
 		for (const w of node.widgets) {
 			if (getSetWidgets.includes(w.name)) {
 				widgetLogic(node, w);
-				let widgetValue = w.value;
+                w._value = w.value
 
-				// Define getters and setters for widget values
 				Object.defineProperty(w, 'value', {
 					get() {
-						return widgetValue;
+						return w._value;
 					},
 					set(newVal) {
-						widgetValue = newVal;
+                        w._value = newVal
 						widgetLogic(node, w);
 					}
 				});
@@ -107,20 +110,30 @@ function toggleMenuOption(node, widget_name) {
 
 app.registerExtension({
 	name: "comfy.smZ.dynamicWidgets",
+
+    /**
+     * Called after inputs, outputs, widgets, menus are added to the node given the node definition.
+     * Used to add methods to nested nodes.
+     * @param nodeType The ComfyNode object to be registered with LiteGraph.
+     * @param nodeData The node definition.
+     * @param app The app.
+     * @returns {Promise<void>}
+     */
 	beforeRegisterNodeDef(nodeType, nodeData, app) {
-		if (nodeType.title == "CLIP Text Encode++") {
+		if (nodeType.title == id) {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 let that = this;
                 const r = onNodeCreated ? onNodeCreated.apply(that, arguments) : undefined;
 
                 // Hide SDXL widgets on init
-                const wname = getSetWidgets[2]
-                let wt = findWidgetByName(that, wname)
+                // const wname = getSetWidgets[2]
+                // let wt = findWidgetByName(that, wname)
                 // wt.value will always be false and doesInputWithNameExist()
                 // doesn't work here since we're inside beforeRegisterNodeDef
-                if (wt && !wt.value)
-                    toggleMenuOption(that, wname)
+                // if (wt && !wt.value)
+                // if (wt)
+                //     toggleMenuOption(that, wname)
 
                 // Reduce node size cause of SDXL widgets
                 that.setSize([that.size[0], that.size[0]/2.0])
@@ -139,24 +152,8 @@ app.registerExtension({
                         },
                     })
 
-                    const customOptions = [
-                        {
-                            content: "Hide/show ",
-                            widget_name: "multi_conditioning"
-                        },
-                        {
-                            content: "Hide/show ",
-                            widget_name: "use_old_emphasis_implementation"
-                        },
-                        {
-                            content: "Hide/show ",
-                            widget_name: "use_CFGDenoiser"
-                        },
-                        {
-                            content: "Hide/show ",
-                            widget_name: "with_SDXL"
-                        },
-                    ].map(x => create_custom_option(x.content + x.widget_name, x.widget_name))
+                    const content_hide_show = "Hide/show ";
+                    const customOptions = widgets.map(widget_name => create_custom_option(content_hide_show + widget_name, widget_name))
 
                     options.unshift(...customOptions);
                 }
@@ -165,8 +162,13 @@ app.registerExtension({
 		}
 	},
 
+    /**
+     * Called when a node is created. Used to add menu options to nodes.
+     * @param node The node that was created.
+     * @param app The app.
+     */
 	nodeCreated(node) {
-		if (node.getTitle() == "CLIP Text Encode++") {
+		if (node.getTitle() == id) {
 			getSetters(node)
 		}
 	}

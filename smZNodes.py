@@ -542,9 +542,9 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         opts.disable_max_denoise = True
         opts.use_CFGDenoiser = use_CFGDenoiser # unused
 
-    sdxl_conds = {}
+    sdxl_params = {}
     if with_SDXL and is_sdxl:
-        sdxl_conds = {
+        sdxl_params = {
             "aesthetic_score": ascore, "width": width, "height": height,
             "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width,
             "target_height": target_height, "text_g": text_g, "text_l": text_l
@@ -558,12 +558,12 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         if with_SDXL and is_sdxl:
             if clip_model_type_name== "SDXLClipModel":
                 out = CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
-                out[0][0][1]['aesthetic_score'] = sdxl_conds['aesthetic_score']
+                out[0][0][1]['aesthetic_score'] = sdxl_params['aesthetic_score']
             elif clip_model_type_name == "SDXLRefinerClipModel":
                 out = CLIPTextEncodeSDXLRefiner().encode(clip, ascore, width, height, text)
                 for item in ['aesthetic_score', 'width', 'height', 'text_g', 'text_l']:
-                    sdxl_conds.pop(item)
-                out[0][0][1].update(sdxl_conds)
+                    sdxl_params.pop(item)
+                out[0][0][1].update(sdxl_params)
         else:
             out = CLIPTextEncode().encode(clip, text)
         if hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
@@ -623,7 +623,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
 
 
 
-        pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_conds}
+        pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_params}
     return ([[cond, pooled if with_pooled == None else with_pooled]], )
 
 # ========================================================================
@@ -634,10 +634,11 @@ class CFGNoisePredictor(torch.nn.Module):
         self.ksampler = _find_outer_instance('self', comfy.samplers.KSampler)
         self.step = 0
         self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
-        self.inner_model = CFGDenoiser(model.apply_model)
-        self.inner_model.num_timesteps = model.num_timesteps
+        self.inner_model = model
+        self.inner_model2 = CFGDenoiser(model.apply_model)
+        self.inner_model2.num_timesteps = model.num_timesteps
+        self.inner_model2.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.s_min_uncond = opts.s_min_uncond
-        self.inner_model.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.alphas_cumprod = model.alphas_cumprod
         self.c_adm = None
         self.init_cond = None
@@ -685,7 +686,7 @@ class CFGNoisePredictor(torch.nn.Module):
             conds_list = cond[0][1]['pooled_output'].conds_list
             cond = (conds_list, co)
             image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
+            out = self.inner_model2(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
         else:
             cond = [[co, cond[0][1]]]
             uncond = [[unc, uncond[0][1]]]

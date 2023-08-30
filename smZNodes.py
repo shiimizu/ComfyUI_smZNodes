@@ -51,7 +51,7 @@ class PopulateVars():
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, SDXLClipGTokenizer, PopulateVars):
+class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, PopulateVars):
     def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
         self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
@@ -98,9 +98,14 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
 
         Originally from `sd1_clip.py`: `encode()` -> `forward()`
         '''
-        if isinstance(tokens, torch.Tensor):
-            tokens = tokens.tolist()
-        z, pooled = self.wrapped(tokens)
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = self.wrapped(tokens)
+        except Exception as e:
+            z, pooled = self.wrapped(tokens_orig)
+
         if z.device != devices.device:
             z = z.to(device=devices.device)
         # if z.dtype != devices.dtype:
@@ -319,17 +324,28 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
     out = text.replace('embedding:', '')
     return out
 
-def expand(t1, t2, empty_t=None, with_zeros=False):
-    if t1.shape[1] < t2.shape[1]:
-        if with_zeros:
-            if empty_t == None: empty_t = shared.sd_model.cond_stage_model_empty_prompt
-            num_repetitions = (t2.shape[1] - t1.shape[1]) // empty_t.shape[1]
-            return torch.cat([t1, empty_t.repeat((t1.shape[0], num_repetitions, 1))], axis=1)
+def expand(tensor1, tensor2):
+    def adjust_tensor_shape(tensor_small, tensor_big):
+        # Calculate replication factor
+        # -(-a // b) is ceiling of division without importing math.ceil
+        replication_factor = -(-tensor_big.size(1) // tensor_small.size(1))
+        
+        # Use repeat to extend tensor_small
+        tensor_small_extended = tensor_small.repeat(1, replication_factor, 1)
+        
+        # Take the rows of the extended tensor_small to match tensor_big
+        tensor_small_matched = tensor_small_extended[:, :tensor_big.size(1), :]
+        
+        return tensor_small_matched
+
+    # Check if their second dimensions are different
+    if tensor1.size(1) != tensor2.size(1):
+        # Check which tensor has the smaller second dimension and adjust its shape
+        if tensor1.size(1) < tensor2.size(1):
+            tensor1 = adjust_tensor_shape(tensor1, tensor2)
         else:
-            num_repetitions = t2.shape[1] // t1.shape[1]
-            return t1.repeat(1, num_repetitions, 1)
-    else:
-        return t1
+            tensor2 = adjust_tensor_shape(tensor2, tensor1)
+    return (tensor1, tensor2)
 
 def reconstruct_schedules(schedules, step):
     create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
@@ -434,8 +450,9 @@ class SDXLClipModel(comfy.sdxl_clip.SDXLClipModel, PopulateVars):
             # Both yield the same results
             # g_out = expand(g_out, l_out, shared.sd_model.cond_stage_model_empty_prompt_g, True)
             # l_out = expand(l_out, g_out, shared.sd_model.cond_stage_model_empty_prompt_l, True)
-            g_out = expand(g_out, l_out)
-            l_out = expand(l_out, g_out)
+            g_out, l_out = expand(g_out, l_out)
+            l_out, g_out = expand(l_out, g_out)
+
         self.clip_l = self.clip_l_orig
         self.clip_g = self.clip_g_orig
         return torch.cat([l_out, g_out], dim=-1), g_pooled
@@ -674,9 +691,9 @@ class CFGNoisePredictor(torch.nn.Module):
         co = cond[0][0]
         unc = uncond[0][0]
         if cond[0][1].get('from_smZ', False) and "comfy" != cond[0][1].get('params',{}).get('parser', 'comfy'):
-            co = expand(co, unc)
+            co, unc = expand(co, unc)
         if uncond[0][1].get('from_smZ', False) and "comfy" != uncond[0][1].get('params',{}).get('parser', 'comfy'):
-            unc = expand(unc, co)
+            unc, co = expand(unc, co)
 
 
         if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):

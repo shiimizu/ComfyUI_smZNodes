@@ -25,58 +25,35 @@ function toggleWidget(node, widget, show = false, suffix = "") {
 
 function widgetLogic(node, widget) {
     if (widget.name === 'parser') {
-		if (widget.value.includes("comfy")) {
-			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'))
-			toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'))
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'))
-		} else {
-			toggleWidget(node, findWidgetByName(node, 'multi_conditioning'), true)
-			// toggleWidget(node, findWidgetByName(node, 'use_old_emphasis_implementation'), true)
-			toggleWidget(node, findWidgetByName(node, 'use_CFGDenoiser'), true)
-		}
-		if (widget.value === "comfy") {
-            toggleWidget(node, findWidgetByName(node, 'mean_normalization'))
-		} else {
-			toggleWidget(node, findWidgetByName(node, 'mean_normalization'), true)
-		}
+        const in_comfy = widget.value.includes("comfy")
+        toggleMenuOption(node, 'multi_conditioning', !in_comfy)
+        toggleMenuOption(node, 'use_CFGDenoiser', !in_comfy)
+        toggleMenuOption(node, 'mean_normalization', widget.value !== "comfy")
+        if (in_comfy)
+            toggleMenuOption(node, 'use_old_emphasis_implementation', false)
 	} else if (widget.name === 'with_SDXL') {
-        if (!widget.init) {
-            widget.init = true
-            toggleWidget(node, findWidgetByName(node, 'with_SDXL'))
+        const ws = ['ascore', 'width', 'height', 'crop_w', 'crop_h', 'target_width', 'target_height', 'text_g', 'text_l']
+        toggleMenuOption(node, 'text', !widget.value)
+
+        // Resize node to half when widget is set to false
+        if (!widget.value){
+            node.setSize([node.size[0], node.size[0]/2.0])
         }
-        if (!widget.value) {
-			toggleWidget(node, findWidgetByName(node, 'ascore'))
-			toggleWidget(node, findWidgetByName(node, 'width'))
-			toggleWidget(node, findWidgetByName(node, 'height'))
-			toggleWidget(node, findWidgetByName(node, 'crop_w'))
-			toggleWidget(node, findWidgetByName(node, 'crop_h'))
-			toggleWidget(node, findWidgetByName(node, 'target_width'))
-			toggleWidget(node, findWidgetByName(node, 'target_height'))
-			toggleWidget(node, findWidgetByName(node, 'text_g'))
-			toggleWidget(node, findWidgetByName(node, 'text_l'))
-		} else {
-			toggleWidget(node, findWidgetByName(node, 'ascore'), true)
-			toggleWidget(node, findWidgetByName(node, 'width'), true)
-			toggleWidget(node, findWidgetByName(node, 'height'), true)
-			toggleWidget(node, findWidgetByName(node, 'crop_w'), true)
-			toggleWidget(node, findWidgetByName(node, 'crop_h'), true)
-			toggleWidget(node, findWidgetByName(node, 'target_width'), true)
-			toggleWidget(node, findWidgetByName(node, 'target_height'), true)
-			toggleWidget(node, findWidgetByName(node, 'text_g'), true)
-			toggleWidget(node, findWidgetByName(node, 'text_l'), true)
-		}
+
+        // Show list of widgets if sdxl widget value is true and vice-versa
+        for (const w of ws) {
+            toggleMenuOption(node, w, widget.value)
+        }
+
+        // Keep showing the widget if it's enabled
+        if (widget.value) {
+            toggleMenuOption(node, widget.name, true)
+        }
 	}
-    // Keep showing the SDXL widget if the node is cloned
-    if (widget.name === 'ascore') {
-        const ascore_widget = findWidgetByName(node, 'ascore')
-        const showing = !(ascore_widget.type == "smZhidden" )
-        if (showing)
-            toggleWidget(node, findWidgetByName(node, 'with_SDXL'), true)
-    }
 }
 
 const widgets = ['parser', 'mean_normalization', 'multi_conditioning', 'use_old_emphasis_implementation', 'use_CFGDenoiser', 'with_SDXL']
-const getSetWidgets = ['parser', 'ascore', 'with_SDXL']
+const getSetWidgets = ['parser', 'with_SDXL']
 
 function getSetters(node) {
 	if (node.widgets)
@@ -94,18 +71,29 @@ function getSetters(node) {
 						widgetLogic(node, w);
 					}
 				});
+
+                // Hide SDXL widget on init
+                // For some reason this fixes its toggling
+                if (w.name === 'with_SDXL' && w) {
+                    toggleMenuOption(node, 'with_SDXL')
+                    w.init = true
+                }
 			}
 		}
 }
 
-function toggleMenuOption(node, widget_name) {
+function toggleMenuOption(node, widget_name, val=null, perform_action = true) {
     let widget = findWidgetByName(node, widget_name)
     if (!widget || doesInputWithNameExist(node, widget.name)) return;
     if (!origProps[widget.name]) {
         origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize };
     }
-    toggleWidget(node, widget, !(widget.type === origProps[widget.name].origType))
-    node.setDirtyCanvas(true);
+    const show = (widget.type === origProps[widget.name].origType)
+    if (perform_action) {
+        toggleWidget(node, widget, val !== null ? val : !show)
+        node.setDirtyCanvas(true);
+    }
+    return show
 }
 
 app.registerExtension({
@@ -125,15 +113,6 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 let that = this;
                 const r = onNodeCreated ? onNodeCreated.apply(that, arguments) : undefined;
-
-                // Hide SDXL widgets on init
-                // const wname = getSetWidgets[2]
-                // let wt = findWidgetByName(that, wname)
-                // wt.value will always be false and doesInputWithNameExist()
-                // doesn't work here since we're inside beforeRegisterNodeDef
-                // if (wt && !wt.value)
-                // if (wt)
-                //     toggleMenuOption(that, wname)
 
                 // Reduce node size cause of SDXL widgets
                 that.setSize([that.size[0], that.size[0]/2.0])

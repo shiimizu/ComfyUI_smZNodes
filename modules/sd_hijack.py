@@ -15,6 +15,9 @@ if not hasattr(ldm.modules.diffusionmodules.model, "nonlinearity_orig"):
 if not hasattr(ldm.modules.diffusionmodules.openaimodel, "th_orig"):
     ldm.modules.diffusionmodules.openaimodel.th_orig = ldm.modules.diffusionmodules.openaimodel.th
 
+ldm.modules.attention.CrossAttention.forward_orig = ldm.modules.attention.CrossAttention.forward
+ldm.modules.diffusionmodules.model.AttnBlock.forward_orig = ldm.modules.diffusionmodules.model.AttnBlock.forward
+
 optimizers = []
 current_optimizer: sd_hijack_optimizations.SdOptimization = None
 already_optimized = False # temp fix for displaying info since two cliptextencode's will run
@@ -31,7 +34,7 @@ def list_optimizers():
     optimizers.extend(new_optimizers)
 
 
-def apply_optimizations(option=None, display=True):
+def apply_optimizations(option=None):
     global already_optimized
     if already_optimized:
         display = False
@@ -52,7 +55,7 @@ def apply_optimizations(option=None, display=True):
     # sgm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
 
     if current_optimizer is not None:
-        # current_optimizer.undo()
+        current_optimizer.undo()
         current_optimizer = None
 
     selection = option or shared.opts.cross_attention_optimization
@@ -68,16 +71,16 @@ def apply_optimizations(option=None, display=True):
         matching_optimizer = optimizers[0]
 
     if matching_optimizer is not None:
-        if display:
+        if shared.opts.debug:
             print(f"Applying attention optimization: {matching_optimizer.name}... ", end='')
         matching_optimizer.apply()
         already_optimized = True
-        if display:
+        if shared.opts.debug:
             print("done.")
         current_optimizer = matching_optimizer
         return current_optimizer
     else:
-        # if display:
+        # if shared.opts.debug:
             # print("Disabling attention optimization")
         return ''
 

@@ -31,6 +31,9 @@ import importlib
 import sys
 import os
 import re
+import contextlib
+import itertools
+import binascii
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -86,7 +89,7 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         return self.encode_with_transformers(tokens, True)
 
     def encode_with_transformers(self, tokens, return_pooled=False):
-        return self.encode_with_transformers_comfy(tokens, return_pooled)
+        return self.encode_with_transformers_comfy_(tokens, return_pooled)
 
     def encode_token_weights(self, tokens):
         pass
@@ -115,6 +118,55 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         z.pooled = pooled
         return (z, pooled) if return_pooled else z
 
+    def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
+        def forward(self, tokens):
+            backup_embeds = self.transformer.get_input_embeddings()
+            device = backup_embeds.weight.device
+            tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
+            tokens = torch.LongTensor(tokens).to(device)
+
+            if backup_embeds.weight.dtype != torch.float32:
+                precision_scope = torch.autocast
+            else:
+                precision_scope = lambda a, b=None: contextlib.nullcontext(a)
+
+            with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
+                outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
+                self.transformer.set_input_embeddings(backup_embeds)
+
+                if self.layer == "last":
+                    z = outputs.last_hidden_state
+                elif self.layer == "pooled":
+                    z = outputs.pooler_output[:, None, :]
+                else:
+                    z = outputs.hidden_states[self.layer_idx]
+                    if self.layer_norm_hidden_state:
+                        # z = self.transformer.text_model.final_layer_norm(z)
+                        z = self.transformer.text_model.final_layer_norm(z.to(dtype=backup_embeds.weight.dtype))
+
+                pooled_output = outputs.pooler_output
+                if self.text_projection is not None:
+                    pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
+            return z.float(), pooled_output.float()
+
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = forward(self.wrapped, tokens) # self.wrapped.encode(tokens)
+        except Exception as e:
+            z, pooled = forward(self.wrapped, tokens_orig)
+
+            # z = self.encode_with_transformers__(tokens_bak)
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
+        return (z, pooled) if return_pooled else z
+
     def tokenize(self, texts):
         # assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
@@ -130,14 +182,14 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
         super().__init__(wrapped, hijack)
 
+    def encode_token_weights(self, tokens):
+        pass
+
     def encode(self, tokens):
         return self.encode_with_transformers(tokens, True)
 
     def encode_with_transformers(self, tokens, return_pooled=False):
-        return self.encode_with_transformers_comfy(tokens, return_pooled)
-
-    def encode_token_weights(self, tokens):
-        pass
+        return self.encode_with_transformers_comfy_(tokens, return_pooled)
 
     def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
         '''
@@ -164,27 +216,54 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         z.pooled = pooled
         return (z, pooled) if return_pooled else z
 
-    def encode_with_transformers__(self, tokens):
-        outputs = self.wrapped.transformer(input_ids=tokens, output_hidden_states=self.wrapped.layer == "hidden")
+    def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
+        def forward(self, tokens):
+            backup_embeds = self.transformer.get_input_embeddings()
+            device = backup_embeds.weight.device
+            tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
+            tokens = torch.LongTensor(tokens).to(device)
 
-        if self.wrapped.layer == "last":
-            z = outputs.last_hidden_state
-        elif self.wrapped.layer == "pooled":
-            z = outputs.pooler_output[:, None, :]
-        else:
-            z = outputs.hidden_states[self.wrapped.layer_idx]
-            if self.wrapped.layer_norm_hidden_state:
-                z = self.wrapped.transformer.text_model.final_layer_norm(z)
+            if backup_embeds.weight.dtype != torch.float32:
+                precision_scope = torch.autocast
+            else:
+                precision_scope = lambda a, b=None: contextlib.nullcontext(a)
 
-        pooled_output = outputs.pooler_output
-        if self.wrapped.text_projection is not None:
-            pooled_output = pooled_output.to(self.wrapped.text_projection.device) @ self.wrapped.text_projection
+            with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
+                outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
+                self.transformer.set_input_embeddings(backup_embeds)
+
+                if self.layer == "last":
+                    z = outputs.last_hidden_state
+                elif self.layer == "pooled":
+                    z = outputs.pooler_output[:, None, :]
+                else:
+                    z = outputs.hidden_states[self.layer_idx]
+                    if self.layer_norm_hidden_state:
+                        # z = self.transformer.text_model.final_layer_norm(z)
+                        z = self.transformer.text_model.final_layer_norm(z.to(dtype=backup_embeds.weight.dtype))
+
+                pooled_output = outputs.pooler_output
+                if self.text_projection is not None:
+                    pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
+            return z.float(), pooled_output.float()
+
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = forward(self.wrapped, tokens) # self.wrapped.encode(tokens)
+        except Exception as e:
+            z, pooled = forward(self.wrapped, tokens_orig)
+
+            # z = self.encode_with_transformers__(tokens_bak)
         if z.device != devices.device:
             z = z.to(device=devices.device)
-        # z=z.float()
-        # z.pooled = pooled_output.float()
-        z.pooled = pooled_output
-        return z
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
+        return (z, pooled) if return_pooled else z
 
     def tokenize_line(self, line):
         line = parse_and_register_embeddings(self, line)
@@ -234,7 +313,8 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
                     if embed is None:
                         print(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
-                        # print(f'using embedding:{embedding_name}')
+                        if opts.debug:
+                            print(f'[smZNodes] using embedding:{embedding_name}')
                         if len(embed.shape) == 1:
                             tokens.append([(embed, weight)])
                         else:
@@ -313,7 +393,8 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
             embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
             if embed is not None:
                 found=True
-                # print(f'using embedding:{embedding_name}')
+                if opts.debug:
+                    print(f'[smZNodes] using embedding:{embedding_name}')
                 if embed.device != devices.device:
                     embed = embed.to(device=devices.device)
                 self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name), self)
@@ -357,25 +438,15 @@ class ClipTokenWeightEncoder:
     def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
         schedules = token_weight_pairs
         texts = token_weight_pairs
+        from .modules.sd_hijack import model_hijack
         if isinstance(token_weight_pairs, list) and isinstance(token_weight_pairs[0], str):
-            from .modules.sd_hijack import model_hijack
             try:
                 model_hijack.hijack(self)
-                # from A1111's processing.py and sd_samplers_kdiffusion.py
-                if multi:
-                    schedules = prompt_parser.get_multicond_learned_conditioning(model_hijack.cond_stage_model, texts, steps)
-                else:
-                    schedules = prompt_parser.get_learned_conditioning(model_hijack.cond_stage_model, texts, steps)
-                model_hijack.undo_hijack(model_hijack.cond_stage_model)
-            except Exception as err:
-                try:
-                    model_hijack.undo_hijack(model_hijack.cond_stage_model)
-                except Exception as err2:
-                    pass
-                raise err
+                if multi:   schedules = prompt_parser.get_multicond_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
+                else:       schedules = prompt_parser.get_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
+            finally:        model_hijack.undo_hijack(model_hijack.cond_stage_model)
         elif type(token_weight_pairs) == list and type(token_weight_pairs[0]) == list and type(token_weight_pairs[0][0]) == tuple:
             # comfy++
-            from .modules.sd_hijack import model_hijack
             try:
                 model_hijack.hijack(self)
                 def encode_toks(_token_weight_pairs):
@@ -392,85 +463,63 @@ class ClipTokenWeightEncoder:
                     zcond.pooled = first_pooled
                     return zcond
                 cond = encode_toks(token_weight_pairs) 
-                model_hijack.undo_hijack(model_hijack.cond_stage_model)
-            except Exception as err:
-                try:
+            finally:
                     model_hijack.undo_hijack(model_hijack.cond_stage_model)
-                except Exception as err2:
-                    pass
-                raise err
             conds_list = [[(0, 1.0)]]
             cond.pooled.conds_list = conds_list
             return (cond, cond.pooled)
         conds_list = [[(0, 1.0)]]
         cond = reconstruct_schedules(schedules, current_step)
-        if type(cond) == tuple:
+        if type(cond) is tuple:
             conds_list, cond = cond
+        cond.pooled = cond.pooled.cpu()
         cond.pooled.conds_list = conds_list
-        return (cond, cond.pooled)
+        cond.pooled.schedules = schedules
+        return (cond.cpu(), cond.pooled)
 
-class SD1ClipModel(ClipTokenWeightEncoder, comfy.sd1_clip.SD1ClipModel, PopulateVars):
-    def __init__(self):
-        pass
-    def wrap(self, clip_model, tokenizer):
-        self.populate_self_variables(clip_model)
-        self.tokenizer = tokenizer
-        return self
+class SD1ClipModel(ClipTokenWeightEncoder): ...
 
-class SDXLClipG(ClipTokenWeightEncoder, comfy.sdxl_clip.SDXLClipG, PopulateVars):
-    def __init__(self):
-        pass
-    def wrap(self, clip_model, tokenizer):
-        self.populate_self_variables(clip_model)
-        self.tokenizer = tokenizer
-        return self
+class SDXLClipG(ClipTokenWeightEncoder): ...
 
-class SDXLClipModel(comfy.sdxl_clip.SDXLClipModel, PopulateVars):
-    def __init__(self):
-        pass
-    def wrap(self, clip_model, tokenizer: comfy.sdxl_clip.SDXLTokenizer):
-        self.populate_self_variables(clip_model)
-        self.clip_l_orig = self.clip_l
-        self.clip_g_orig = self.clip_g
-        self.clip_l_ = SD1ClipModel().wrap(self.clip_l, tokenizer.clip_l)
-        self.clip_g_ = SDXLClipG().wrap(self.clip_g, tokenizer.clip_g)
-        self.tokenizer = tokenizer
-        return self
+class SDXLClipModel(ClipTokenWeightEncoder):
 
-    def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
-        self.clip_g = self.clip_g_
-        self.clip_l = self.clip_l_
+    def encode_token_weights(self: comfy.sdxl_clip.SDXLClipModel, token_weight_pairs, steps=0, current_step=0, multi=False):
         token_weight_pairs_g = token_weight_pairs["g"]
         token_weight_pairs_l = token_weight_pairs["l"]
-        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
-        l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l, steps, current_step, multi)
+
+        self.clip_g.encode_token_weights_orig = self.clip_g.encode_token_weights
+        self.clip_l.encode_token_weights_orig = self.clip_l.encode_token_weights
+        self.clip_g.cond_stage_model = self.clip_g
+        self.clip_l.cond_stage_model = self.clip_l
+        self.clip_g.encode_token_weights = partial(SDXLClipG.encode_token_weights, self.clip_g)
+        self.clip_l.encode_token_weights = partial(SD1ClipModel.encode_token_weights, self.clip_l)
+        try:
+            g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
+            l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l, steps, current_step, multi)
+            # g_out, g_pooled = SDXLClipG.encode_token_weights(self.clip_g, token_weight_pairs_g, steps, current_step, multi)
+            # l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l, steps, current_step, multi)
+        finally:
+            self.clip_g.encode_token_weights = self.clip_g.encode_token_weights_orig
+            self.clip_l.encode_token_weights = self.clip_l.encode_token_weights_orig
+            self.clip_g.cond_stage_model = None
+            self.clip_l.cond_stage_model = None
+
         if hasattr(g_pooled, 'schedules') and hasattr(l_pooled, 'schedules'):
             g_pooled.schedules = {"g": g_pooled.schedules, "l": l_pooled.schedules}
-        if opts.pad_with_repeats:
-            # Both yield the same results
-            # g_out = expand(g_out, l_out, shared.sd_model.cond_stage_model_empty_prompt_g, True)
-            # l_out = expand(l_out, g_out, shared.sd_model.cond_stage_model_empty_prompt_l, True)
-            g_out, l_out = expand(g_out, l_out)
-            l_out, g_out = expand(l_out, g_out)
 
-        self.clip_l = self.clip_l_orig
-        self.clip_g = self.clip_g_orig
+        g_out, l_out = expand(g_out, l_out)
+        l_out, g_out = expand(l_out, g_out)
+
         return torch.cat([l_out, g_out], dim=-1), g_pooled
 
-class SDXLRefinerClipModel(comfy.sdxl_clip.SDXLRefinerClipModel, PopulateVars):
-    def __init__(self):
-        pass
-    def wrap(self, clip_model, tokenizer: comfy.sdxl_clip.SDXLTokenizer):
-        self.populate_self_variables(clip_model)
-        self.clip_g_orig = self.clip_g
-        self.clip_g_ = SDXLClipG().wrap(self.clip_g, tokenizer.clip_g)
-        self.tokenizer = tokenizer
-        return self
-    def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
-        self.clip_g = self.clip_g_
+class SDXLRefinerClipModel(ClipTokenWeightEncoder):
+
+    def encode_token_weights(self: comfy.sdxl_clip.SDXLClipModel, token_weight_pairs, steps=0, current_step=0, multi=False):
+        self.clip_g.encode_token_weights_orig = self.clip_g.encode_token_weights
+        self.clip_g.encode_token_weights = SDXLClipG.encode_token_weights
         token_weight_pairs_g = token_weight_pairs["g"]
-        g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
-        self.clip_g = self.clip_g_orig
+        try: g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
+        finally: self.clip_g.encode_token_weights = self.clip_g.encode_token_weights_orig
         if hasattr(g_pooled, 'schedules'):
             g_pooled.schedules = {"g": g_pooled.schedules}
         return (g_out, g_pooled)
@@ -497,55 +546,51 @@ def _find_outer_instance(target, target_type):
         frame = frame.f_back
     return None
 
-class LazyCond:
-    def __init__(self, cond = None):
-        self.cond = cond
-        self.steps = 1
 
-    def __get__(self, instance, owner):
-        return self._get()
-
-    def _get(self):
-        if (steps := _find_outer_instance('steps', int)) is None:
-            steps = self.steps
-        if self.steps != steps:
-            self.steps = steps
-            if self._is_prompt_editing():
-                params = self.cond[0][1]['params']
-                params['steps'] = steps
-                params.pop('step', None)
-                res = run(**params)[0]
-                res[0][1]['params'] = {}
-                res[0][1]['params'].update(params)
-                self.cond = res
-        return self.cond
-
-    def _is_prompt_editing(self):
-        params = self.cond[0][1]['params']
-        text = params['text']
-        text_g = params['text_g']
-        text_l = params['text_l']
-        with_SDXL = params['with_SDXL']
-        is_SDXL = "SDXL" in type(params['clip'].cond_stage_model).__name__
-        text_all = (text_g + ' ' + text_l) if with_SDXL and is_SDXL else text
-        found = '[' in text_all and ']' in text_all
-        return found or is_prompt_editing(getattr(self.cond[0][1]['pooled_output'], 'schedules', None))
-
-    def __iter__(self):
-        return self._get().__iter__()
+def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
+    """
+    creates random noise given a latent image and a seed.
+    optional arg skip can be used to skip and discard x number of noise generations for a given seed
+    """
+    from .modules.shared import opts
+    from comfy.sample import np
+    generator = torch.Generator(device).manual_seed(seed)
+    if opts.rand_source == 'nv':
+        from .modules import rng_philox
+        rng = rng_philox.Generator(seed)
+    if noise_inds is None:
+        shape = latent_image.size()
+        if opts.rand_source == 'nv':
+            return torch.asarray(rng.randn(shape), device=device)
+        else:
+            return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)
+    
+    unique_inds, inverse = np.unique(noise_inds, return_inverse=True)
+    noises = []
+    for i in range(unique_inds[-1]+1):
+        shape = [1] + list(latent_image.size())[1:]
+        if opts.rand_source == 'nv':
+            noise = torch.asarray(rng.randn(shape), device=device)
+        else:
+            noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)
+        if i in unique_inds:
+            noises.append(noise)
+    noises = [noises[i] for i in inverse]
+    noises = torch.cat(noises, axis=0)
+    return noises
 
 def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
-               multi_conditioning, use_old_emphasis_implementation,
-               use_CFGDenoiser, with_SDXL, ascore, width, height, crop_w, 
-               crop_h, target_width, target_height, text_g, text_l, steps=1, step=0, with_pooled=None):
+               multi_conditioning, use_old_emphasis_implementation, with_SDXL,
+               ascore, width, height, crop_w, crop_h, target_width, target_height,
+               text_g, text_l, steps=1, step=0):
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
     is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
     if is_sdxl:
         # Prevents tensor shape mismatch
-        shared.cmd_opts.always_batch_cond_uncond = True
-        shared.batch_cond_uncond = True
+        # This is what comfy does by default
+        opts.batch_cond_uncond = True
         
     parser_d = {"full": "Full parser",
             "compel": "Compel parser",
@@ -555,10 +600,6 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             }
     opts.prompt_attention = parser_d.get(parser, "Comfy parser")
 
-    if "comfy" not in parser:
-        opts.disable_max_denoise = True
-        opts.use_CFGDenoiser = use_CFGDenoiser # unused
-
     sdxl_params = {}
     if with_SDXL and is_sdxl:
         sdxl_params = {
@@ -567,8 +608,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             "target_height": target_height, "text_g": text_g, "text_l": text_l
         }
     pooled={}
-    if not hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
-        SD1Tokenizer.tokenize_with_weights_orig = SD1Tokenizer.tokenize_with_weights
+    tokenize_with_weights_orig = SD1Tokenizer.tokenize_with_weights
     if parser == "comfy":
         SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
         clip_model_type_name = type(clip.cond_stage_model).__name__ 
@@ -581,10 +621,11 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 for item in ['aesthetic_score', 'width', 'height', 'text_g', 'text_l']:
                     sdxl_params.pop(item)
                 out[0][0][1].update(sdxl_params)
+            else:
+                raise NotImplementedError()
         else:
             out = CLIPTextEncode().encode(clip, text)
-        if hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
-            SD1Tokenizer.tokenize_with_weights = SD1Tokenizer.tokenize_with_weights_orig
+        SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_orig
         return out
     else:
         texts = [text]
@@ -596,54 +637,167 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             else:
                 texts = {"g": texts, "l": texts}
 
-        clip_clone = clip.clone()
-        # clip_clone = clip
-        def get_custom_cond_stage_model():
+        # clip_clone = clip.clone()
+        clip_clone = clip
+        clip_clone.cond_stage_model_orig = clip_clone.cond_stage_model
+        clip_clone.cond_stage_model.encode_token_weights_orig = clip_clone.cond_stage_model.encode_token_weights
+
+        def patch_cond_stage_model():
             nonlocal clip_clone
             from .smZNodes import SD1ClipModel, SDXLClipModel, SDXLRefinerClipModel
-            clip_model_type_name = type(clip_clone.cond_stage_model).__name__
-            tokenizer = clip_clone.tokenizer
-            if clip_model_type_name== "SDXLClipModel":
-                return SDXLClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
-            elif clip_model_type_name == "SDXLRefinerClipModel":
-                return SDXLRefinerClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
+            ctp = type(clip_clone.cond_stage_model)
+            clip_clone.cond_stage_model.tokenizer = clip_clone.tokenizer
+            if ctp is comfy.sdxl_clip.SDXLClipModel:
+                clip_clone.cond_stage_model.encode_token_weights = SDXLClipModel.encode_token_weights
+                clip_clone.cond_stage_model.clip_g.tokenizer = clip_clone.tokenizer.clip_g
+                clip_clone.cond_stage_model.clip_l.tokenizer = clip_clone.tokenizer.clip_l
+            elif ctp is comfy.sdxl_clip.SDXLRefinerClipModel:
+                clip_clone.cond_stage_model.encode_token_weights = SDXLRefinerClipModel.encode_token_weights
+                clip_clone.cond_stage_model.clip_g.tokenizer = clip_clone.tokenizer.clip_g
             else:
-                return SD1ClipModel().wrap(clip_clone.cond_stage_model, tokenizer)
+                clip_clone.cond_stage_model.encode_token_weights = SD1ClipModel.encode_token_weights
 
         tokens = texts
-        if with_pooled != None:
-            tokens = with_pooled['pooled_output'].schedules
         if parser == "comfy++":
             SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
             tokens = clip_clone.tokenize(text)
-            if hasattr(SD1Tokenizer, 'tokenize_with_weights_orig'):
-                SD1Tokenizer.tokenize_with_weights = SD1Tokenizer.tokenize_with_weights_orig
+            SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_orig
         cond = pooled = None
+        patch_cond_stage_model()
+        try:
+            clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, clip_clone.cond_stage_model, steps=steps, current_step=step, multi=multi_conditioning)
+            cond, pooled = clip_clone.encode_from_tokens(tokens, True)
+        finally:
+            clip_clone.cond_stage_model = clip_clone.cond_stage_model_orig
+            clip_clone.cond_stage_model.encode_token_weights = clip_clone.cond_stage_model.encode_token_weights_orig
+        
+        if opts.debug:
+            print('[smZNodes] using steps', steps)
+        gen_id = lambda : binascii.hexlify(os.urandom(1024))[64:72]
+        id=gen_id()
+        schedules = pooled.schedules
+        pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": pooled.conds_list, **sdxl_params}
+        out = [[cond, pooled]]
+        if is_prompt_editing(schedules):
+            with devices.autocast():
+                for x in range(1,steps):
+                    if type(schedules) is not dict:
+                        cond=reconstruct_schedules(schedules, x)
+                        if type(cond) is tuple:
+                            conds_list, cond = cond
+                            pooled['conds_list'] = conds_list
+                        cond=cond.cpu()
+                    elif type(schedules) is dict:
+                        g_out = reconstruct_schedules(schedules['g'], x)
+                        if type(g_out) is tuple: _, g_out = g_out
+                        l_out = reconstruct_schedules(schedules['l'], x)
+                        if type(l_out) is tuple: _, l_out = l_out
+                        g_out, l_out = expand(g_out, l_out)
+                        l_out, g_out = expand(l_out, g_out)
+                        cond = torch.cat([l_out, g_out], dim=-1).cpu()
+                    else:
+                        raise NotImplementedError
+                    out = out + [[cond, pooled]]
+        out[0][1]['orig_len'] = len(out)
+    return (out,)
 
-        # Because of prompt editing, we need the total number of steps
-        # So this function will be called back at the sampling stage
-        # Note that this means encoding will happen twice
-        cond_stage_model_orig = clip_clone.cond_stage_model
-        if with_pooled == None:
-            clip_clone.cond_stage_model = get_custom_cond_stage_model()
-        else:
-            clip_clone.load_model_orig = clip_clone.load_model
-            clip_clone.load_model = lambda x=None:x
-            clip_clone.cond_stage_model = with_pooled['pooled_output'].cond_stage_model
-        clip_clone.cond_stage_model.encode_token_weights = partial(clip_clone.cond_stage_model.encode_token_weights, steps=steps, current_step=step, multi=multi_conditioning)
-        cond, pooled = clip_clone.encode_from_tokens(tokens, True)
-        if with_pooled == None:
-            pooled.cond_stage_model = clip_clone.cond_stage_model
-        else:
-            clip_clone.load_model = clip_clone.load_model_orig
-        clip_clone.cond_stage_model = cond_stage_model_orig
+
+from server import PromptServer
+import json
+def prompt_handler(json_data):
+    data=json_data['prompt']
+    def tmp():
+        nonlocal data
+        def find_nearest_ksampler(clip_id):
+            """Find the nearest KSampler node that references the given CLIPTextEncode id."""
+            for ksampler_id, node in data.items():
+                if node["class_type"] == "KSampler":
+                    # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
+                    if check_link_to_clip(ksampler_id, clip_id):
+                        ksampler_steps_value = node["inputs"].get("steps", 1)
+                        # If the steps value is a list, get the referenced node's steps
+                        if isinstance(ksampler_steps_value, list):
+                            referenced_node = data[ksampler_steps_value[0]]
+                            # print('referenced_node',referenced_node['inputs'])
+                            vs=ksampler_steps_value=list(referenced_node["inputs"].values())
+                            if len(vs) == 1 and isinstance(vs[0], int):
+                                return vs[0]
+                        else:
+                            return ksampler_steps_value
+            return None
+        def fd(node_id, steps_id, visited):
+            visited = set()
+
+            node = data[node_id]
+            
+            if node_id in visited:
+                return False
+            visited.add(node_id)
+            for value in node["inputs"].values():
+                if isinstance(value, list):
+                    return fd(node_id, visited)
+                elif isinstance(value, int):
+                    return value
+                else:
+                    raise NotImplementedError()
+
+        def check_link_to_clip(node_id, clip_id, visited=None):
+            """Check if a given node links directly or indirectly to a CLIPTextEncode node."""
+            if visited is None:
+                visited = set()
+
+            node = data[node_id]
+            
+            if node_id in visited:
+                return False
+            visited.add(node_id)
+
+            for input_value in node["inputs"].values():
+                if isinstance(input_value, list) and input_value[0] == clip_id:
+                    return True
+                if isinstance(input_value, list) and check_link_to_clip(input_value[0], clip_id, visited):
+                    return True
+
+            return False
 
 
-
-        pooled = {"pooled_output": pooled, "from_smZ": True, "use_CFGDenoiser": use_CFGDenoiser, **sdxl_params}
-    return ([[cond, pooled if with_pooled == None else with_pooled]], )
+        # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
+        for clip_id, node in data.items():
+            if node["class_type"] == "smZ CLIPTextEncode":
+                steps = find_nearest_ksampler(clip_id)
+                if opts.debug:
+                    print(f'[smZNodes] id: {clip_id} | find_nearest_ksampler {steps}')
+                if steps is not None:
+                    node["inputs"]["steps"] = steps
+    tmp()
+    return json_data
+PromptServer.instance.add_on_prompt_handler(prompt_handler)
 
 # ========================================================================
+def bounded_modulo(number, modulo_value):
+    return number if number < modulo_value else modulo_value
+
+
+def calc_cond(c, current_step):
+    """Group by smZ conds that may do prompt-editing / regular conds / comfy conds."""
+    _cond = []
+    # Group by conds from smZ
+    fn=lambda x : x[1].get("from_smZ", None) is not None
+    an_iterator = itertools.groupby(c, fn )
+    for key, group in an_iterator:
+        ls=list(group)
+        # Group by prompt-editing conds
+        fn2=lambda x : x[1].get("smZid", None)
+        an_iterator2 = itertools.groupby(ls, fn2)
+        for key2, group2 in an_iterator2:
+            ls2=list(group2)
+            if key2 is not None:
+                orig_len = ls2[0][1].get('orig_len', 1)
+                i = bounded_modulo(current_step, orig_len - 1)
+                _cond = _cond + [ls2[i]]
+            else:
+                _cond = _cond + ls2
+    return _cond
 
 class CFGNoisePredictor(torch.nn.Module):
     def __init__(self, model):
@@ -664,51 +818,42 @@ class CFGNoisePredictor(torch.nn.Module):
         self.is_prompt_editing_c = False
 
     def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        if not (cond[0][1].get('from_smZ', False) and uncond[0][1].get('from_smZ', False)):
-            return self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
-
-        if self.init_cond is None:
-            self.init_cond = cond
-            self.init_uncond = uncond
-            self.is_prompt_editing_c = is_prompt_editing(getattr(cond[0][1]['pooled_output'], 'schedules', None))
-            self.is_prompt_editing_u = is_prompt_editing(getattr(uncond[0][1]['pooled_output'], 'schedules', None))
-        if self.step != 0:
-            cond = self.init_cond
-            if self.is_prompt_editing_c:
-                params = cond[0][1]['params']
-                params['step'] = self.step
-                cond = run(with_pooled=cond[0][1], **params)[0]
-
-            uncond = self.init_uncond
-            if self.is_prompt_editing_u:
-                params = uncond[0][1]['params']
-                params['step'] = self.step
-                uncond = run(with_pooled=uncond[0][1], **params)[0]
-
-            if (self.is_prompt_editing_c or self.is_prompt_editing_u) and (not torch.all(self.init_cond[0][0] == cond[0][0]).item() or not torch.all(self.init_uncond[0][0] == uncond[0][0]).item()):
-                cond, uncond = process_conds_comfy(self.ksampler, cond, uncond)
-            
-        co = cond[0][0]
-        unc = uncond[0][0]
-        if cond[0][1].get('from_smZ', False) and "comfy" != cond[0][1].get('params',{}).get('parser', 'comfy'):
-            co, unc = expand(co, unc)
-        if uncond[0][1].get('from_smZ', False) and "comfy" != uncond[0][1].get('params',{}).get('parser', 'comfy'):
-            unc, co = expand(unc, co)
-
-
-        if cond[0][1].get('use_CFGDenoiser', False) or uncond[0][1].get('use_CFGDenoiser', False):
-            if cond[0][1].get("adm_encoded", None) != None and self.c_adm == None:
-                self.c_adm = torch.cat([cond[0][1]['adm_encoded'], uncond[0][1]['adm_encoded']])
-            x.c_adm = self.c_adm
-            conds_list = cond[0][1]['pooled_output'].conds_list
-            cond = (conds_list, co)
-            image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model2(x, timestep, cond=cond, uncond=unc, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
-        else:
-            cond = [[co, cond[0][1]]]
-            uncond = [[unc, uncond[0][1]]]
-            out = self.orig.apply_model(x, timestep, cond, uncond, cond_scale, cond_concat, model_options, seed)
+        
+        cc=calc_cond(cond, self.step)
+        uu=calc_cond(uncond, self.step)
         self.step += 1
+
+        if (any([p[1].get('from_smZ', False) for p in cc]) or 
+            any([p[1].get('from_smZ', False) for p in uu])):
+            if model_options.get('transformer_options',None) is None:
+                model_options['transformer_options'] = {}
+            model_options['transformer_options']['from_smZ'] = True
+
+        if not opts.use_CFGDenoiser:
+            out = self.orig.apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
+        else:
+            # Only supports one cond
+            for ix in range(len(cc)):
+                if cc[ix][1].get('from_smZ', False):
+                    cc = [cc[ix]]
+                    break
+            for ix in range(len(uu)):
+                if uu[ix][1].get('from_smZ', False):
+                    uu = [uu[ix]]
+                    break
+            c=cc[0][1]
+            u=uu[0][1]
+            _cc = cc[0][0]
+            _uu = uu[0][0]
+            if c.get("adm_encoded", None) is not None:
+                self.c_adm = torch.cat([c['adm_encoded'], u['adm_encoded']])
+                # SDXL. Need to pad with repeats
+                _cc, _uu = expand(_cc, _uu)
+                _uu, _cc = expand(_uu, _cc)
+            x.c_adm = self.c_adm
+            conds_list = c.get('conds_list', [[(0, 1.0)]])
+            image_cond = txt2img_image_conditioning(None, x)
+            out = self.inner_model2(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
         return out
 
 def txt2img_image_conditioning(sd_model, x, width=None, height=None):
@@ -729,43 +874,6 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
     #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
 
-def process_conds_comfy(self, positive, negative):
-        from comfy.sample import broadcast_cond
-        from comfy.samplers import (resolve_cond_masks, calculate_start_end_timesteps,
-                                            create_cond_with_same_area_if_none, pre_run_control,
-                                            apply_empty_x_to_equal_area, encode_adm)
-        noise = getattr(self.model_k, "noise", opts.noise)
-        if not hasattr(self, "device"):
-            self.device = devices.device
-        device = self.device
-
-        positive = broadcast_cond(positive, noise.shape[0], device)
-        negative = broadcast_cond(negative, noise.shape[0], device)
-
-        positive = positive[:]
-        negative = negative[:]
-
-        resolve_cond_masks(positive, noise.shape[2], noise.shape[3], self.device)
-        resolve_cond_masks(negative, noise.shape[2], noise.shape[3], self.device)
-
-        calculate_start_end_timesteps(self.model_wrap, negative)
-        calculate_start_end_timesteps(self.model_wrap, positive)
-
-        #make sure each cond area has an opposite one with the same area
-        for c in positive:
-            create_cond_with_same_area_if_none(negative, c)
-        for c in negative:
-            create_cond_with_same_area_if_none(positive, c)
-
-        pre_run_control(self.model_wrap, negative + positive)
-
-        apply_empty_x_to_equal_area(list(filter(lambda c: c[1].get('control_apply_to_uncond', False) == True, positive)), negative, 'control', lambda cond_cnets, x: cond_cnets[x])
-        apply_empty_x_to_equal_area(positive, negative, 'gligen', lambda cond_cnets, x: cond_cnets[x])
-
-        if self.model.is_adm():
-            positive = encode_adm(self.model, positive, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "positive")
-            negative = encode_adm(self.model, negative, noise.shape[0], noise.shape[3], noise.shape[2], self.device, "negative")
-        return (positive, negative)
 
 # =======================================================================================
 
@@ -796,16 +904,15 @@ class smz_SDKSampler(nodes.KSampler):
         it['hidden']['use_CFGDenoiser'] = ([False, True],{"default": True})
         return it
     def sample(self, use_CFGDenoiser=True, *args, **kwargs):
-        opts.data['use_CFGDenoiser'] = use_CFGDenoiser
-        KSampler_orig = comfy.samplers.KSampler
+        opts.use_CFGDenoiser = use_CFGDenoiser
+        comfy.samplers.KSampler_orig = comfy.samplers.KSampler
         ret = None
         try:
             comfy.samplers.KSampler = SDKSampler
             ret = super(smz_SDKSampler, self).sample(*args, **kwargs)
-            comfy.samplers.KSampler = KSampler_orig
-        except Exception as err:
-            comfy.samplers.KSampler = KSampler_orig
-            raise err
+            comfy.samplers.KSampler = comfy.samplers.KSampler_orig
+        finally:
+            comfy.samplers.KSampler = comfy.samplers.KSampler_orig
         return ret
 
 # =======================================================================================

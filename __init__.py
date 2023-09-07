@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import importlib
 
 def install(module):
     import sys
@@ -33,15 +34,11 @@ def reload() :
 init()
 
 # compel =================
-try:
-    from compel import Compel
-except ImportError:
+if importlib.util.find_spec('compel') is None:
     install("compel")
 
 # lark =================
-try:
-    from lark import Lark
-except ImportError:
+if importlib.util.find_spec('lark') is None:
     install("lark")
 # ============================
 
@@ -54,20 +51,14 @@ def copy_to_web(file):
 
 web_extension_path = os.path.join(comfy_path, "web", "extensions", "smZNodes")
 
-smZdynamicWidgets_JS_file = os.path.join(cwd_path, "js", "smZdynamicWidgets.js")
-
-if not os.path.exists(web_extension_path):
-    os.makedirs(web_extension_path)
-else:
+if os.path.exists(web_extension_path):
     shutil.rmtree(web_extension_path)
-    os.makedirs(web_extension_path)
-
-copy_to_web(smZdynamicWidgets_JS_file)
 
 # ==============
+WEB_DIRECTORY = "./web"
 
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
 # add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
 from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
@@ -78,19 +69,21 @@ from comfy.samplers import KSampler
 payload = [{
     "target_line": 'extra_args["denoise_mask"] = denoise_mask',
     "code_to_insert": """
-            if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
+            if (any([_p[1].get('from_smZ', False) for _p in positive]) or 
+                any([_p[1].get('from_smZ', False) for _p in negative])):
                 from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
-                if smZ_opts.disable_max_denoise:
+                if not smZ_opts.sgm_noise_multiplier:
                     max_denoise = False
 """
 },
 {
     "target_line": 'positive = positive[:]',
     "code_to_insert": """
-        if positive[0][1].get('from_smZ', False) or negative[0][1].get('from_smZ', False):
+        if (any([_p[1].get('from_smZ', False) for _p in positive]) or 
+            any([_p[1].get('from_smZ', False) for _p in negative])):
             from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
             smZ_opts.noise = noise
-            self.model_denoise.step = start_step if start_step != None else 0
+        self.model_denoise.step = start_step if start_step != None else 0
 """
 },
 ]

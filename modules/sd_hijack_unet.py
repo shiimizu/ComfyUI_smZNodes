@@ -6,6 +6,7 @@ from .sd_hijack_utils import CondFunc
 from torch.nn.functional import silu
 import comfy
 from comfy import ldm
+import contextlib
 
 class TorchHijackForUnet:
     """
@@ -34,18 +35,6 @@ class TorchHijackForUnet:
 
 th = TorchHijackForUnet()
 
-# Below are monkey patches to enable upcasting a float16 UNet for float32 sampling
-def apply_model(orig_func, self, x_noisy, t, cond, **kwargs):
-    if isinstance(cond, dict):
-        for y in cond.keys():
-            if isinstance(cond[y], list):
-                cond[y] = [x.to(devices.dtype_unet) if isinstance(x, torch.Tensor) else x for x in cond[y]]
-            else:
-                cond[y] = cond[y].to(devices.dtype_unet) if isinstance(cond[y], torch.Tensor) else cond[y]
-
-    with devices.autocast():
-        return orig_func(self, x_noisy.to(devices.dtype_unet), t.to(devices.dtype_unet), cond, **kwargs).float()
-
 from . import sd_hijack_optimizations
 from comfy.model_base import BaseModel
 from functools import wraps
@@ -55,25 +44,19 @@ BaseModel.apply_model_orig = BaseModel.apply_model
 # @contextmanager
 class ApplyOptimizationsContext:
     def __init__(self):
-        # print("INIT Applying opttimizations")
-        if not hasattr(ldm.modules.diffusionmodules.model, "nonlinearity_orig"):
-            ldm.modules.diffusionmodules.model.nonlinearity_orig = ldm.modules.diffusionmodules.model.nonlinearity
-        if not hasattr(ldm.modules.diffusionmodules.openaimodel, "th_orig"):
-            ldm.modules.diffusionmodules.openaimodel.th_orig = ldm.modules.diffusionmodules.openaimodel.th
-        if ldm.modules.diffusionmodules.model.nonlinearity != silu:
-            ldm.modules.diffusionmodules.model.nonlinearity = silu
-        if ldm.modules.diffusionmodules.openaimodel.th != th:
-            ldm.modules.diffusionmodules.openaimodel.th = th
-        # sdp_no_mem.apply()
+        self.nonlinearity = ldm.modules.diffusionmodules.model.nonlinearity
+        self.th = ldm.modules.diffusionmodules.openaimodel.th
+        ldm.modules.diffusionmodules.model.nonlinearity = silu
+        ldm.modules.diffusionmodules.openaimodel.th = th
+        sdp_no_mem.apply()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        # print("Undoing opttimizations")
-        ldm.modules.diffusionmodules.model.nonlinearity = ldm.modules.diffusionmodules.model.nonlinearity_orig
-        ldm.modules.diffusionmodules.openaimodel.th = ldm.modules.diffusionmodules.openaimodel.th_orig
-        # sd_hijack_optimizations.undo()
+        ldm.modules.diffusionmodules.model.nonlinearity = self.nonlinearity
+        ldm.modules.diffusionmodules.openaimodel.th = self.th
+        sd_hijack_optimizations.undo()
 
 
 
@@ -84,9 +67,12 @@ def ApplyOptimizationsContext3(func):
             return func(*args, **kwargs)
     return wrapper
 
+precision_scope_null = lambda a, b=None: contextlib.nullcontext(a)
 
-@ApplyOptimizationsContext3
-def apply_model22(self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None, control=None, transformer_options={}):
+def apply_model(orig_func, self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None, control=None, transformer_options={}, *args, **kwargs):
+    if not transformer_options.get('from_smZ', False):
+        return self.apply_model_orig(x_noisy, t, c_concat, c_crossattn, c_adm, control, transformer_options, **kwargs)
+
     cond=c_crossattn
     if isinstance(cond, dict):
         for y in cond.keys():
@@ -95,10 +81,15 @@ def apply_model22(self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None,
             else:
                 cond[y] = cond[y].to(devices.dtype_unet) if isinstance(cond[y], torch.Tensor) else cond[y]
 
-    with devices.autocast():
-        return self.apply_model_orig(x_noisy, t, c_concat, cond, c_adm, control, transformer_options)
+    if x_noisy.dtype != torch.float32:
+        precision_scope = torch.autocast
+    else:
+        precision_scope = precision_scope_null
 
-BaseModel.apply_model = apply_model22
+    with precision_scope(comfy.model_management.get_autocast_device(x_noisy.device)): # , torch.float32):
+    # with devices.autocast():
+        out = orig_func(self, x_noisy, t, c_concat, cond, c_adm, control, transformer_options, **kwargs).float()
+    return out
 
 class GELUHijack(torch.nn.GELU, torch.nn.Module):
     def __init__(self, *args, **kwargs):
@@ -119,7 +110,7 @@ def hijack_ddpm_edit():
 
 
 unet_needs_upcast = lambda *args, **kwargs: devices.unet_needs_upcast
-# CondFunc('comfy.model_base.BaseModel.apply_model', apply_model2, unet_needs_upcast)
+CondFunc('comfy.model_base.BaseModel.apply_model', apply_model, unet_needs_upcast)
 # CondFunc('ldm.models.diffusion.ddpm.LatentDiffusion.apply_model', apply_model, unet_needs_upcast)
 CondFunc('ldm.modules.diffusionmodules.openaimodel.timestep_embedding', lambda orig_func, timesteps, *args, **kwargs: orig_func(timesteps, *args, **kwargs).to(torch.float32 if timesteps.dtype == torch.int64 else devices.dtype_unet), unet_needs_upcast)
 if version.parse(torch.__version__) <= version.parse("1.13.2") or torch.cuda.is_available():

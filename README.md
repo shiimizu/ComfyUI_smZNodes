@@ -1,29 +1,40 @@
 
 # smZNodes
-A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). There is only one at the moment.
+A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
-# CLIP Text Encode++
+1. [CLIP Text Encode++](#CLIP%20Text%20Encode++)
+2. [Settings](#Settings)
+
+## CLIP Text Encode++
 
 <p align="center">
     <div class="row">
         <p align="center">
-        <img width="335" alt="Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/582132fd-0c1f-4ddc-ad32-3c8ef4884b4f">
-        <img width="447" alt="With SDXL" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/d79126f1-3339-448f-b7fb-66d4063508c8"></p>
+            <img width="1255" alt="Clip Text Encode++ – Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/ec85fd20-2b83-43cd-9f19-5aba34034e2a">
     </div>
 </p>
 
 
 
 
-Achieve identical embeddings from [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
+
+CLIP Text Encode++ can generate identical embeddings from [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
 
-This means you can reproduce the same images generated from `stable-diffusion-webui` (and its forks) on `ComfyUI`.
+This means you can reproduce the same images generated from `stable-diffusion-webui` on `ComfyUI`.
 
-Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser.
+Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser with the Settings node.
 
 
-## Installation
+### Features
+
+- [Prompt editng](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
+    - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
+- Weight normalization
+- Usage of `BREAK` and `AND`
+- Optional `embedding:` identifier
+
+### Installation
 
 Three methods are available for installation:
 
@@ -32,7 +43,7 @@ Three methods are available for installation:
 3. Download the project manually.
 
 
-### Load via ComfyUI Manager
+#### Load via ComfyUI Manager
 
 
 <div align="center">
@@ -40,14 +51,14 @@ Three methods are available for installation:
     <p>Install via ComfyUI manager</p>
 </div>
 
-### Clone Repository
+#### Clone Repository
 
 ```shell
 cd path/to/your/ComfyUI/custom_nodes
 git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 ```
 
-### Download Manually
+#### Download Manually
 
 1. Download the project archive from [here](https://github.com/shiimizu/ComfyUI_smZNodes/archive/refs/heads/main.zip).
 2. Extract the downloaded zip file.
@@ -57,7 +68,7 @@ git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
 The folder structure should resemble: `path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes`.
 
 
-## Update
+### Update
 
 To update the extension, update via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) or pull the latest changes from the repository:
 
@@ -66,7 +77,7 @@ cd path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes
 git pull
 ```
 
-## Comparisons
+### Comparisons
 These images can be dragged into ComfyUI to load their workflows. Each image is done using the [Silicon29](https://huggingface.co/Xynon/SD-Silicon) (in SD v1.5) checkpoint with 18 steps using the Heun sampler.
 
 |stable-diffusion-webui|A1111 parser|Comfy parser|
@@ -78,7 +89,7 @@ Image slider links:
 - https://imgsli.com/MTkxMjE0
 - https://imgsli.com/MTkxMjEy
 
-## Options
+### Options
 
 |Name|Description|
 | --- | --- |
@@ -86,9 +97,8 @@ Image slider links:
 | `mean_normalization` | Whether to take the mean of your prompt weights. It's `true` by default on `stable-diffusion-webui`.<br>This is implemented according to `stable-diffusion-webui`. (They say that it's probably not the correct way to take the mean.) |
 | `multi_conditioning` | This is usually set to `true` for your positive prompt and `false` for your negative prompt. <blockquote> For each prompt, the list is obtained by splitting the prompt using the `AND` separator. <br>See [Compositional Visual Generation with Composable Diffusion Models](https://energy-based-model.github.io/Compositional-Visual-Generation-with-Composable-Diffusion-Models/) </blockquote> |
 |`use_old_emphasis_implementation`| <blockquote>Use old emphasis implementation. Can be useful to reproduce old seeds.</blockquote>|
-|`use_CFGDenoiser`|An experimental option to use `stable-diffusion-webui`'s denoiser. It may not work as expected with inpainting or UnCLIP models but it allows you to get _identical_ images _regardless_ of the prompt. The denoiser will be used for every sampler using the conditioning if it is set to `true` on either one of your positive or negative nodes. To turn it off, set it to `false` for both nodes. |
 
-> **Note**  
+> [!IMPORTANT]  
 > You can right click the node to show/hide some of the widgets. E.g. the `with_SDXL` option.
 
 <br>
@@ -108,10 +118,16 @@ Image slider links:
 > **Warning**  
 > Hypernetwork syntax (`<lora:name:1.0>`) is not suppprted.
 
+## Settings
+
+The Settings node can be used to finetune results from Clip Text Encode++. Some settings apply globally, or just during tokenization, or just for CFGDenoiser. The `RNG` setting applies globally.
+
+This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before Clip Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `show/hide all descriptions` menu option.
+
+
 ## Tips to get reproducible results on both UIs
-- Use the CPU to generate noise on `stable-diffusion-webui`. See [this](https://github.com/comfyanonymous/ComfyUI/discussions/118) discussion. Or if you insist on using the GPU, try using the KSampler GPU node. 
-- Use the same seed, sampler settings, and clip skip (CLIP Set Last Layer).
-- Ancestral samplers may not be predictable.
+- Use the same seed, sampler settings, RNG (CPU or GPU), clip skip (CLIP Set Last Layer), etc.
+- Ancestral samplers may not be deterministic.
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.
 

@@ -144,7 +144,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                 chunk.tokens += [0] * emb_len
                 chunk.multipliers += [weight] * emb_len
                 position += embedding_length_in_tokens
-        if len(chunk.tokens) > 0 or len(chunks) == 0:
+        if chunk.tokens or not chunks:
             next_chunk(is_last=True)
         return chunks, token_count
 
@@ -190,8 +190,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         to_pad_count = max(opts.max_chunk_count, chunk_count) - chunk_count
         if to_pad_count > 0:
-            self.empty_batch_chunks = self.process_texts([""])[0]
-            batch_chunks = [batch_chunks[0] + self.empty_batch_chunks[0] * to_pad_count]
+            self.empty_batch_chunks, _ = self.process_texts([""])
+            batch_chunks=[z+x*to_pad_count for z,x in zip(batch_chunks, self.empty_batch_chunks)]
             chunk_count = max([len(x) for x in batch_chunks])
 
         zs = []

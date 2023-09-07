@@ -711,7 +711,7 @@ def prompt_handler(json_data):
         def find_nearest_ksampler(clip_id):
             """Find the nearest KSampler node that references the given CLIPTextEncode id."""
             for ksampler_id, node in data.items():
-                if node["class_type"] == "KSampler":
+                if "Sampler" in node["class_type"] or "sampler" in node["class_type"]:
                     # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
                     if check_link_to_clip(ksampler_id, clip_id):
                         ksampler_steps_value = node["inputs"].get("steps", 1)

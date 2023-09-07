@@ -675,7 +675,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             print('[smZNodes] using steps', steps)
         gen_id = lambda : binascii.hexlify(os.urandom(1024))[64:72]
         id=gen_id()
-        schedules = pooled.schedules
+        schedules = getattr(pooled, 'schedules', [[(0, 1.0)]])
         pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": pooled.conds_list, **sdxl_params}
         out = [[cond, pooled]]
         if is_prompt_editing(schedules):

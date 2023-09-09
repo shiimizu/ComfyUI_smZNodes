@@ -68,12 +68,20 @@ class smZ_CLIPTextEncode:
             shared.sd_model.cond_stage_model_empty_prompt = empty[0][0]
         return result
 
+# Hack: string type that is always equal in not equal comparisons
+class AnyType(str):
+    def __ne__(self, __value: object) -> bool:
+        return False
+
+# Our any instance wants to be a wildcard string
+anytype = AnyType("*")
+
 class smZ_Settings:
     @classmethod
     def INPUT_TYPES(s):
         from .modules.shared import opts
         return {"required": {
-                                "any": ("*",),
+                                "any": (anytype, {}),
                                 },
                 "optional": {
                     "extra": ("STRING", {"multiline": True, "default": '{"show":true}'}),
@@ -108,13 +116,14 @@ class smZ_Settings:
                     "Use previous prompt editing timelines": ("BOOLEAN", {"default": opts.use_old_scheduling}),
 
                     "ㅤ"*5: ("STRING", {"multiline": False, "default": "Experimental"}),
-                    "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to get _identical_ images regardless of the prompt."}),
+                    "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to get identical images regardless of the prompt."}),
                     "Use CFGDenoiser": ("BOOLEAN", {"default": opts.use_CFGDenoiser}),
                     "info_debug": ("STRING", {"multiline": True, "default": "Debugging messages in the console."}),
                     "Debug": ("BOOLEAN", {"default": opts.debug, "label_on": "on", "label_off": "off"}),
                 }}
-    RETURN_TYPES = ("*",)
-    # OUTPUT_NODE = True
+    RETURN_TYPES = (anytype,)
+    RETURN_NAMES = ("ANY",)
+    OUTPUT_NODE = False
     FUNCTION = "run"
     CATEGORY = "advanced"
 

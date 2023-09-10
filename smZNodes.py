@@ -273,6 +273,8 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
         return tokenized
 
+emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?"
+
 def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=False):
     '''
     Takes a prompt and converts it to a list of (token, weight, word id) elements.
@@ -289,9 +291,8 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
     parsed_weights = token_weights(text, 1.0)
 
     embs = get_valid_embeddings(self.embedding_directory) if self.embedding_directory is not None else []
-    embs_str = '|'.join(embs)
-    embs_str = embs_str + '|' if embs_str else ''
-    emb_re = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?".format(embs_str)
+    embs_str = embs_str + '|' if (embs_str:='|'.join(embs)) else ''
+    emb_re = emb_re_.format(embs_str)
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
 
     #tokenize words
@@ -308,7 +309,10 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
                 end=match.end()
                 if (fragment:=word[last_end:start]):
                     leftovers.append(fragment)
-                if (embedding_name := match.group(2)) is not None:
+                ext = ext if (ext:=match.group(4)) else ''
+                embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
+                embedding_name = embedding_sname + ext
+                if embedding_name:
                     embed, leftover = self._try_get_embedding(embedding_name)
                     if embed is None:
                         print(f"warning, embedding:{embedding_name} does not exist, ignoring")
@@ -383,13 +387,15 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
 
     embs = get_valid_embeddings(self.wrapped.tokenizer_parent.embedding_directory)
     embs_str = '|'.join(embs)
-    emb_re = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?".format(embs_str + '|' if embs_str else '')
+    emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
     matches = emb_re.finditer(text)
-    offset = 0
     for matchNum, match in enumerate(matches, start=1):
         found=False
-        if (embedding_name := match.group(2)):
+        ext = ext if (ext:=match.group(4)) else ''
+        embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
+        embedding_name = embedding_sname + ext
+        if embedding_name:
             embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
             if embed is not None:
                 found=True
@@ -397,12 +403,10 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                     print(f'[smZNodes] using embedding:{embedding_name}')
                 if embed.device != devices.device:
                     embed = embed.to(device=devices.device)
-                self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_name), self)
+                self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_sname), self)
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-            text = inverse_substring(text, match.start(), match.end(), offset)
-            offset += len(embedding_name)
-    out = text.replace('embedding:', '')
+    out = emb_re.sub(r"\2", text)
     return out
 
 def expand(tensor1, tensor2):
@@ -438,24 +442,30 @@ class ClipTokenWeightEncoder:
     def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
         schedules = token_weight_pairs
         texts = token_weight_pairs
+        conds_list = [[(0, 1.0)]]
         from .modules.sd_hijack import model_hijack
-        if isinstance(token_weight_pairs, list) and isinstance(token_weight_pairs[0], str):
-            try:
-                model_hijack.hijack(self)
+        try:
+            model_hijack.hijack(self)
+            if isinstance(token_weight_pairs, list) and isinstance(token_weight_pairs[0], str):
                 if multi:   schedules = prompt_parser.get_multicond_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
                 else:       schedules = prompt_parser.get_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
-            finally:        model_hijack.undo_hijack(model_hijack.cond_stage_model)
-        elif type(token_weight_pairs) == list and type(token_weight_pairs[0]) == list and type(token_weight_pairs[0][0]) == tuple:
-            # comfy++
-            try:
-                model_hijack.hijack(self)
+                cond = reconstruct_schedules(schedules, current_step)
+                if type(cond) is tuple:
+                    conds_list, cond = cond
+                pooled = cond.pooled.cpu()
+                cond = cond.cpu()
+                cond.pooled = pooled
+                cond.pooled.conds_list = conds_list
+                cond.pooled.schedules = schedules
+            elif type(token_weight_pairs) == list and type(token_weight_pairs[0]) == list and type(token_weight_pairs[0][0]) == tuple:
+                # comfy++
                 def encode_toks(_token_weight_pairs):
                     zs = []
                     first_pooled = None
                     for batch_chunk in _token_weight_pairs:
-                        tokens_ = [x[0] for x in batch_chunk]
+                        tokens = [x[0] for x in batch_chunk]
                         multipliers = [x[1] for x in batch_chunk]
-                        z = model_hijack.cond_stage_model.process_tokens([tokens_], [multipliers])
+                        z = model_hijack.cond_stage_model.process_tokens([tokens], [multipliers])
                         if first_pooled == None:
                             first_pooled = z.pooled
                         zs.append(z)
@@ -463,19 +473,13 @@ class ClipTokenWeightEncoder:
                     zcond.pooled = first_pooled
                     return zcond
                 cond = encode_toks(token_weight_pairs) 
-            finally:
-                    model_hijack.undo_hijack(model_hijack.cond_stage_model)
-            conds_list = [[(0, 1.0)]]
-            cond.pooled.conds_list = conds_list
-            return (cond, cond.pooled)
-        conds_list = [[(0, 1.0)]]
-        cond = reconstruct_schedules(schedules, current_step)
-        if type(cond) is tuple:
-            conds_list, cond = cond
-        cond.pooled = cond.pooled.cpu()
-        cond.pooled.conds_list = conds_list
-        cond.pooled.schedules = schedules
-        return (cond.cpu(), cond.pooled)
+                pooled = cond.pooled.cpu()
+                cond = cond.cpu()
+                cond.pooled = pooled
+                cond.pooled.conds_list = conds_list
+        finally:
+                model_hijack.undo_hijack(model_hijack.cond_stage_model)
+        return (cond, cond.pooled)
 
 class SD1ClipModel(ClipTokenWeightEncoder): ...
 

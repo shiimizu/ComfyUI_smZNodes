@@ -14,6 +14,9 @@ class Embedding:
         self.optimizer_state_dict = None
         self.filename = None
 
+        self.shape = vec.shape[-1]
+        self.vectors = vec.shape[0]
+
     def save(self, filename):
         embedding_data = {
             "string_to_token": {"*": 265},

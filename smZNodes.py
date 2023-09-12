@@ -125,7 +125,16 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
             tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
             tokens = torch.LongTensor(tokens).to(device)
 
-            if backup_embeds.weight.dtype != torch.float32:
+            # dtype=backup_embeds.weight.dtype
+            dtype=self.transformer.text_model.final_layer_norm.weight.dtype
+            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+            if dtype_num(dtype) >= 32:
+                dtype=torch.float16 if model_management.should_use_fp16(device,prioritize_performance=False) else dtype
+            token_embedding_dtype = position_embedding_dtype = torch.float32
+            self.transformer.text_model.embeddings.position_embedding.to(dtype)
+            self.transformer.text_model.embeddings.token_embedding.to(dtype)
+
+            if dtype != torch.float32:
                 precision_scope = torch.autocast
             else:
                 precision_scope = lambda a, b=None: contextlib.nullcontext(a)
@@ -141,12 +150,13 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
                 else:
                     z = outputs.hidden_states[self.layer_idx]
                     if self.layer_norm_hidden_state:
-                        # z = self.transformer.text_model.final_layer_norm(z)
-                        z = self.transformer.text_model.final_layer_norm(z.to(dtype=backup_embeds.weight.dtype))
+                        z = self.transformer.text_model.final_layer_norm(z.to(dtype)) # (z)
 
                 pooled_output = outputs.pooler_output
                 if self.text_projection is not None:
                     pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
+            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
+            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
             return z.float(), pooled_output.float()
 
         tokens_orig = tokens
@@ -223,7 +233,16 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
             tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
             tokens = torch.LongTensor(tokens).to(device)
 
-            if backup_embeds.weight.dtype != torch.float32:
+            # dtype=backup_embeds.weight.dtype
+            dtype=self.transformer.text_model.final_layer_norm.weight.dtype
+            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+            if dtype_num(dtype) >= 32:
+                dtype=torch.float16 if model_management.should_use_fp16(device,prioritize_performance=False) else dtype
+            token_embedding_dtype = position_embedding_dtype = torch.float32
+            self.transformer.text_model.embeddings.position_embedding.to(dtype)
+            self.transformer.text_model.embeddings.token_embedding.to(dtype)
+
+            if dtype != torch.float32:
                 precision_scope = torch.autocast
             else:
                 precision_scope = lambda a, b=None: contextlib.nullcontext(a)
@@ -239,12 +258,13 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
                 else:
                     z = outputs.hidden_states[self.layer_idx]
                     if self.layer_norm_hidden_state:
-                        # z = self.transformer.text_model.final_layer_norm(z)
-                        z = self.transformer.text_model.final_layer_norm(z.to(dtype=backup_embeds.weight.dtype))
+                        z = self.transformer.text_model.final_layer_norm(z.to(dtype)) # (z)
 
                 pooled_output = outputs.pooler_output
                 if self.text_projection is not None:
                     pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
+            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
+            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
             return z.float(), pooled_output.float()
 
         tokens_orig = tokens

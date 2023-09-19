@@ -2,8 +2,8 @@
 # smZNodes
 A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
 
-1. [CLIP Text Encode++](#CLIP%20Text%20Encode++)
-2. [Settings](#Settings)
+1. [CLIP Text Encode++](#clip-text-encode)
+2. [Settings](#settings)
 
 ## CLIP Text Encode++
 
@@ -28,7 +28,7 @@ Simple prompts generate _identical_ images. More complex prompts with complex at
 
 ### Features
 
-- [Prompt editng](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
+- [Prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
     - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
 - Weight normalization
 - Usage of `BREAK` and `AND`
@@ -120,9 +120,9 @@ Image slider links:
 
 ## Settings
 
-The Settings node can be used to finetune results from Clip Text Encode++. Some settings apply globally, or just during tokenization, or just for CFGDenoiser. The `RNG` setting applies globally.
+The Settings node can be used to finetune results from CLIP Text Encode++. Some settings apply globally, or just during tokenization, or just for CFGDenoiser. The `RNG` setting applies globally.
 
-This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before Clip Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `show/hide all descriptions` menu option.
+This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before CLIP Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `show/hide all descriptions` menu option.
 
 
 ## Tips to get reproducible results on both UIs

@@ -826,15 +826,12 @@ def calc_cond(c, current_step):
 class CFGNoisePredictor(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
-        self.ksampler = _find_outer_instance('self', comfy.samplers.KSampler)
+        self.inner_model = model
+        self.alphas_cumprod = model.alphas_cumprod
         self.step = 0
         self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
-        self.inner_model = model
         self.inner_model2 = CFGDenoiser(model.apply_model)
-        self.inner_model2.num_timesteps = model.num_timesteps
-        self.inner_model2.device = self.ksampler.device if hasattr(self.ksampler, "device") else devices.device
         self.s_min_uncond = opts.s_min_uncond
-        self.alphas_cumprod = model.alphas_cumprod
         self.c_adm = None
         self.init_cond = None
         self.init_uncond = None

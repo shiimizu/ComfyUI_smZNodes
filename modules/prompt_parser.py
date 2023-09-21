@@ -311,7 +311,7 @@ def reconstruct_cond_batch(c: List[List[ScheduledPromptConditioning]], current_s
     for i, cond_schedule in enumerate(c):
         target_index = 0
         for current, entry in enumerate(cond_schedule):
-            if current_step <= entry.end_at_step:
+            if int(current_step) <= int(entry.end_at_step):
                 target_index = current
                 break
 
@@ -352,7 +352,7 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
         for composable_prompt in composable_prompts:
             target_index = 0
             for current, entry in enumerate(composable_prompt.schedules):
-                if current_step <= entry.end_at_step:
+                if int(current_step) <= int(entry.end_at_step):
                     target_index = current
                     break
 

@@ -540,7 +540,7 @@ class SDXLRefinerClipModel(ClipTokenWeightEncoder):
 
     def encode_token_weights(self: comfy.sdxl_clip.SDXLClipModel, token_weight_pairs, steps=0, current_step=0, multi=False):
         self.clip_g.encode_token_weights_orig = self.clip_g.encode_token_weights
-        self.clip_g.encode_token_weights = SDXLClipG.encode_token_weights
+        self.clip_g.encode_token_weights = partial(SDXLClipG.encode_token_weights, self.clip_g)
         token_weight_pairs_g = token_weight_pairs["g"]
         try: g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
         finally: self.clip_g.encode_token_weights = self.clip_g.encode_token_weights_orig

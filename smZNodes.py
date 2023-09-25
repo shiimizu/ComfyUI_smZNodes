@@ -540,7 +540,7 @@ class SDXLRefinerClipModel(ClipTokenWeightEncoder):
 
     def encode_token_weights(self: comfy.sdxl_clip.SDXLClipModel, token_weight_pairs, steps=0, current_step=0, multi=False):
         self.clip_g.encode_token_weights_orig = self.clip_g.encode_token_weights
-        self.clip_g.encode_token_weights = SDXLClipG.encode_token_weights
+        self.clip_g.encode_token_weights = partial(SDXLClipG.encode_token_weights, self.clip_g)
         token_weight_pairs_g = token_weight_pairs["g"]
         try: g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
         finally: self.clip_g.encode_token_weights = self.clip_g.encode_token_weights_orig
@@ -732,38 +732,34 @@ def prompt_handler(json_data):
     data=json_data['prompt']
     def tmp():
         nonlocal data
+        current_clip_id = None
         def find_nearest_ksampler(clip_id):
             """Find the nearest KSampler node that references the given CLIPTextEncode id."""
             for ksampler_id, node in data.items():
                 if "Sampler" in node["class_type"] or "sampler" in node["class_type"]:
                     # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
                     if check_link_to_clip(ksampler_id, clip_id):
-                        ksampler_steps_value = node["inputs"].get("steps", 1)
-                        # If the steps value is a list, get the referenced node's steps
-                        if isinstance(ksampler_steps_value, list):
-                            referenced_node = data[ksampler_steps_value[0]]
-                            # print('referenced_node',referenced_node['inputs'])
-                            vs=ksampler_steps_value=list(referenced_node["inputs"].values())
-                            if len(vs) == 1 and isinstance(vs[0], int):
-                                return vs[0]
-                        else:
-                            return ksampler_steps_value
+                        return get_steps(data, ksampler_id)
             return None
-        def fd(node_id, steps_id, visited):
-            visited = set()
 
-            node = data[node_id]
+        def get_steps(graph, node_id):
+            node = graph.get(str(node_id), {})
+            steps_input_value = node.get("inputs", {}).get("steps", None)
             
-            if node_id in visited:
-                return False
-            visited.add(node_id)
-            for value in node["inputs"].values():
-                if isinstance(value, list):
-                    return fd(node_id, visited)
-                elif isinstance(value, int):
-                    return value
+            while(True):
+                # Base case: it's a direct value
+                if isinstance(steps_input_value, (int, float, str)):
+                    return min(max(1, int(steps_input_value)), 10000)
+
+                # Loop case: it's a reference to another node
+                elif isinstance(steps_input_value, list):
+                    ref_node_id, ref_input_index = steps_input_value
+                    ref_node = graph.get(str(ref_node_id), {})
+                    keys = list(ref_node.get("inputs", {}).keys())
+                    ref_input_key = keys[ref_input_index % len(keys)]
+                    steps_input_value = ref_node.get("inputs", {}).get(ref_input_key)
                 else:
-                    raise NotImplementedError()
+                    return None
 
         def check_link_to_clip(node_id, clip_id, visited=None):
             """Check if a given node links directly or indirectly to a CLIPTextEncode node."""
@@ -788,11 +784,12 @@ def prompt_handler(json_data):
         # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
         for clip_id, node in data.items():
             if node["class_type"] == "smZ CLIPTextEncode":
+                current_clip_id = clip_id
                 steps = find_nearest_ksampler(clip_id)
-                if opts.debug:
-                    print(f'[smZNodes] id: {clip_id} | find_nearest_ksampler {steps}')
                 if steps is not None:
                     node["inputs"]["steps"] = steps
+                    if opts.debug:
+                        print(f'[smZNodes] id: {current_clip_id} | steps: {steps}')
     tmp()
     return json_data
 PromptServer.instance.add_on_prompt_handler(prompt_handler)
@@ -850,7 +847,7 @@ class CFGNoisePredictor(torch.nn.Module):
                 model_options['transformer_options'] = {}
             model_options['transformer_options']['from_smZ'] = True
 
-        if not opts.use_CFGDenoiser:
+        if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
             out = self.orig.apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
         else:
             # Only supports one cond

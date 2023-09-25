@@ -31,7 +31,7 @@ Simple prompts generate _identical_ images. More complex prompts with complex at
 - [Prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
     - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
 - Weight normalization
-- Usage of `BREAK` and `AND`
+- Usage of `BREAK` and `AND` keywords
 - Optional `embedding:` identifier
 
 ### Installation
@@ -48,7 +48,7 @@ Three methods are available for installation:
 
 <div align="center">
     <img width="1207" alt="ComfyUI Manager" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/310d934d-c8db-4c4a-af2a-7a26938eb751">
-    <p>Install via ComfyUI manager</p>
+    <p>Install via ComfyUI Manager</p>
 </div>
 
 #### Clone Repository
@@ -116,13 +116,19 @@ Image slider links:
 > Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
 > **Warning**  
-> Hypernetwork syntax (`<lora:name:1.0>`) is not suppprted.
+> LoRA syntax (`<lora:name:1.0>`) is not suppprted.
 
 ## Settings
 
+<div align="center">
+    <img width="2753" alt="Settings Workflow" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/31427491-f313-4fa4-be7e-18333cba4de6">
+    <p>Settings node workflow</p>
+</div>
+
+
 The Settings node can be used to finetune results from CLIP Text Encode++. Some settings apply globally, or just during tokenization, or just for CFGDenoiser. The `RNG` setting applies globally.
 
-This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before CLIP Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `show/hide all descriptions` menu option.
+This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before CLIP Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `Hide/show all descriptions` menu option.
 
 
 ## Tips to get reproducible results on both UIs

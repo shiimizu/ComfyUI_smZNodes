@@ -64,8 +64,10 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
 
 add_sample_dpmpp_2m_alt()
-import comfy.sample
-from comfy.samplers import KSampler
+
+# ==============
+# Hijack sampling
+
 payload = [{
     "target_line": 'extra_args["denoise_mask"] = denoise_mask',
     "code_to_insert": """
@@ -88,8 +90,49 @@ payload = [{
 },
 ]
 
-KSampler.sample = inject_code(KSampler.sample, payload)
+# import comfy.sample
+# from comfy.samplers import KSampler
+# KSampler.sample = inject_code(KSampler.sample, payload)
 
 import comfy
-comfy.samplers.CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
+comfy.samplers.KSamplerOrig = comfy.samplers.KSampler
+comfy.samplers.SamplerOrig = comfy.samplers.Sampler
+comfy.samplers.DDIM_Orig = comfy.samplers.DDIM
+comfy.samplers.UNIPC_Orig = comfy.samplers.UNIPC
+comfy.samplers.UNIPCBH2_Orig = comfy.samplers.UNIPCBH2
+
+# Account for start_step and if a conditioning is ours
+class KSampler(comfy.samplers.KSamplerOrig):
+    def sample(self, noise, positive, negative, cfg, latent_image=None, start_step=None, last_step=None, force_full_denoise=False, denoise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
+        params = locals()
+        self.model.start_step = start_step
+        self.model.from_smZ = (any([_p[1].get('from_smZ', False) for _p in positive]) or 
+            any([_p[1].get('from_smZ', False) for _p in negative]))
+        params.pop('self', None)
+        params.pop('__class__', None)
+        return super().sample(**params)
+
+class Sampler(comfy.samplers.SamplerOrig):
+    def max_denoise(self, model_wrap, sigmas):
+        model = model_wrap.inner_model.inner_model
+        if hasattr(model, 'start_step') and model.start_step is not None:
+            model_wrap.inner_model.step = min(0, int(model.start_step))
+        if model.from_smZ:
+            from .modules.shared import opts
+            if opts.sgm_noise_multiplier:
+                return super().max_denoise(model_wrap, sigmas)
+            else:
+                return False
+        else:
+            return super().max_denoise(model_wrap, sigmas)
+
+class DDIM(Sampler, comfy.samplers.DDIM_Orig): ...
+class UNIPC(Sampler, comfy.samplers.UNIPC_Orig): ...
+class UNIPCBH2(Sampler, comfy.samplers.UNIPCBH2_Orig): ...
+
+comfy.samplers.Sampler = Sampler
+comfy.samplers.DDIM = DDIM
+comfy.samplers.UNIPC = UNIPC
+comfy.samplers.UNIPCBH2 = UNIPCBH2
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
+comfy.samplers.KSampler = KSampler

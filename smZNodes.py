@@ -820,13 +820,11 @@ def calc_cond(c, current_step):
                 _cond = _cond + ls2
     return _cond
 
-class CFGNoisePredictor(torch.nn.Module):
+comfy.samplers.CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
+class CFGNoisePredictor(comfy.samplers.CFGNoisePredictorOrig):
     def __init__(self, model):
-        super().__init__()
-        self.inner_model = model
-        self.alphas_cumprod = model.alphas_cumprod
+        super().__init__(model)
         self.step = 0
-        self.orig = comfy.samplers.CFGNoisePredictorOrig(model)
         self.inner_model2 = CFGDenoiser(model.apply_model)
         self.s_min_uncond = opts.s_min_uncond
         self.c_adm = None
@@ -848,7 +846,7 @@ class CFGNoisePredictor(torch.nn.Module):
             model_options['transformer_options']['from_smZ'] = True
 
         if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
-            out = self.orig.apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
+            out = super().apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
         else:
             # Only supports one cond
             for ix in range(len(cc)):

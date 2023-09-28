@@ -95,28 +95,44 @@ payload = [{
 # KSampler.sample = inject_code(KSampler.sample, payload)
 
 import comfy
-comfy.samplers.KSamplerOrig = comfy.samplers.KSampler
-comfy.samplers.SamplerOrig = comfy.samplers.Sampler
-comfy.samplers.DDIM_Orig = comfy.samplers.DDIM
-comfy.samplers.UNIPC_Orig = comfy.samplers.UNIPC
-comfy.samplers.UNIPCBH2_Orig = comfy.samplers.UNIPCBH2
+_KSampler_sample = comfy.samplers.KSampler.sample
+_Sampler = comfy.samplers.Sampler
+_DDIM = comfy.samplers.DDIM
+_UNIPC = comfy.samplers.UNIPC
+_UNIPCBH2 = comfy.samplers.UNIPCBH2
+_sample = comfy.samplers.sample
 
-# Account for start_step and if a conditioning is ours
-class KSampler(comfy.samplers.KSamplerOrig):
-    def sample(self, noise, positive, negative, cfg, latent_image=None, start_step=None, last_step=None, force_full_denoise=False, denoise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
-        params = locals()
-        self.model.start_step = start_step
-        self.model.from_smZ = (any([_p[1].get('from_smZ', False) for _p in positive]) or 
-            any([_p[1].get('from_smZ', False) for _p in negative]))
-        params.pop('self', None)
-        params.pop('__class__', None)
-        return super().sample(**params)
+def get_value_from_args(args, kwargs, key_to_lookup, fn):
+    arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    value = None
+    if key_to_lookup in kwargs:
+        value = kwargs[key_to_lookup]
+    else:
+        # Get its position in the formal parameters list and retrieve from args
+        index = arg_names.index(key_to_lookup)
+        value = args[index] if index < len(args) else None
+    return value
 
-class Sampler(comfy.samplers.SamplerOrig):
+def KSampler_sample(*args, **kwargs):
+    start_step = get_value_from_args(args, kwargs, 'start_step', _KSampler_sample)
+    if start_step is not None:
+        args[0].model.start_step = start_step
+    return _KSampler_sample(*args, **kwargs)
+
+def sample(*args, **kwargs):
+    model = get_value_from_args(args, kwargs, 'model', _sample)
+    positive = get_value_from_args(args, kwargs, 'positive', _sample)
+    negative = get_value_from_args(args, kwargs, 'negative', _sample)
+    model.from_smZ = (any([_p[1].get('from_smZ', False) for _p in positive]) or 
+        any([_p[1].get('from_smZ', False) for _p in negative]))
+    return _sample(*args, **kwargs)
+
+class Sampler(_Sampler):
     def max_denoise(self, model_wrap, sigmas):
         model = model_wrap.inner_model.inner_model
-        if hasattr(model, 'start_step') and model.start_step is not None:
-            model_wrap.inner_model.step = min(0, int(model.start_step))
+        if getattr(model, 'start_step', None) is not None:
+            model_wrap.inner_model.step = int(model.start_step)
+            del model.start_step
         if model.from_smZ:
             from .modules.shared import opts
             if opts.sgm_noise_multiplier:
@@ -126,13 +142,14 @@ class Sampler(comfy.samplers.SamplerOrig):
         else:
             return super().max_denoise(model_wrap, sigmas)
 
-class DDIM(Sampler, comfy.samplers.DDIM_Orig): ...
-class UNIPC(Sampler, comfy.samplers.UNIPC_Orig): ...
-class UNIPCBH2(Sampler, comfy.samplers.UNIPCBH2_Orig): ...
+class DDIM(Sampler, _DDIM): ...
+class UNIPC(Sampler, _UNIPC): ...
+class UNIPCBH2(Sampler, _UNIPCBH2): ...
 
 comfy.samplers.Sampler = Sampler
 comfy.samplers.DDIM = DDIM
 comfy.samplers.UNIPC = UNIPC
 comfy.samplers.UNIPCBH2 = UNIPCBH2
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
-comfy.samplers.KSampler = KSampler
+comfy.samplers.KSampler.sample = KSampler_sample
+comfy.samplers.sample = sample

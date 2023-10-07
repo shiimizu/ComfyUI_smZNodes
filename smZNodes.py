@@ -15,16 +15,16 @@ import comfy.sd1_clip
 import comfy.sample
 from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
 from comfy.sdxl_clip import SDXLClipGTokenizer
-from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_base, model_management
 from comfy.samplers import KSampler, CompVisVDenoiser, KSamplerX0Inpaint
 from comfy.k_diffusion.external import CompVisDenoiser
 from types import MethodType
+import comfy_extras
 import nodes
 import inspect
-from textwrap import dedent
+from textwrap import dedent, indent
 import functools
 import tempfile
 import importlib
@@ -34,6 +34,13 @@ import re
 import contextlib
 import itertools
 import binascii
+
+try:
+    from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
+except Exception as err:
+    print(f"[smZNodes]: Your ComfyUI version is outdated. Please update to the latest version. ({err})")
+    class CLIPTextEncodeSDXL(CLIPTextEncode): ...
+    class CLIPTextEncodeSDXLRefiner(CLIPTextEncode): ...
 
 def get_learned_conditioning(self, c):
     if self.cond_stage_forward is None:
@@ -48,13 +55,118 @@ def get_learned_conditioning(self, c):
         c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
     return c
 
-class PopulateVars():
+class PopulateVars:
     def populate_self_variables(self, from_):
         super_attrs = vars(from_)
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, PopulateVars):
+should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_fp16)
+class ClipTextEncoderCustom:
+
+    def _forward(self: comfy.sd1_clip.SD1ClipModel, tokens):
+        backup_embeds = self.transformer.get_input_embeddings()
+        device = backup_embeds.weight.device
+        tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
+        tokens = torch.LongTensor(tokens).to(device)
+
+        # dtype=backup_embeds.weight.dtype
+        dtype=self.transformer.text_model.final_layer_norm.weight.dtype
+        dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+        newv = False
+        if dtype_num(dtype) >= 32:
+            should_use_fp16 = devices.dtype
+            if 'device' in should_use_fp16_signature.parameters and 'prioritize_performance' in should_use_fp16_signature.parameters:
+                newv = True
+                should_use_fp16 = model_management.should_use_fp16(device=device, prioritize_performance=False)
+            elif 'device' in should_use_fp16_signature.parameters:
+                should_use_fp16 = model_management.should_use_fp16(device=device)
+            else:
+                should_use_fp16 = model_management.should_use_fp16()
+            dtype = torch.float16 if should_use_fp16 else dtype
+        token_embedding_dtype = position_embedding_dtype = torch.float32
+        if newv:
+            self.transformer.text_model.embeddings.position_embedding.to(dtype)
+            self.transformer.text_model.embeddings.token_embedding.to(dtype)
+
+        if dtype != torch.float32:
+            precision_scope = torch.autocast
+        else:
+            precision_scope = lambda a, b=None: contextlib.nullcontext(a)
+
+        with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
+            outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
+            self.transformer.set_input_embeddings(backup_embeds)
+
+            if self.layer == "last":
+                z = outputs.last_hidden_state
+            elif self.layer == "pooled":
+                z = outputs.pooler_output[:, None, :]
+            else:
+                z = outputs.hidden_states[self.layer_idx]
+                if self.layer_norm_hidden_state:
+                    # new version of comfyui
+                    # z = self.transformer.text_model.final_layer_norm(z)
+                    try:
+                        z = self.transformer.text_model.final_layer_norm(z.to(device=device, dtype=dtype)) # (z)
+                    except Exception as err:
+                        if opts.debug:
+                            print("[smZNodes] ERROR final_layer_norm:", err)
+                        z = self.transformer.text_model.final_layer_norm(z)
+
+            pooled_output = outputs.pooler_output
+            if self.text_projection is not None:
+                pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
+        if newv:
+            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
+            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
+        return z.float(), pooled_output.float()
+
+    def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = ClipTextEncoderCustom._forward(self.wrapped, tokens) # self.wrapped.encode(tokens)
+        except Exception as e:
+            z, pooled = ClipTextEncoderCustom._forward(self.wrapped, tokens_orig)
+
+            # z = self.encode_with_transformers__(tokens_bak)
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
+        return (z, pooled) if return_pooled else z
+
+    def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
+        '''
+        This function is different from `clip.cond_stage_model.encode_token_weights()`
+        in that the tokens are `List[List[int]]`, not including the weights.
+
+        Originally from `sd1_clip.py`: `encode()` -> `forward()`
+        '''
+        tokens_orig = tokens
+        try:
+            if isinstance(tokens, torch.Tensor):
+                tokens = tokens.tolist()
+            z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
+        except Exception as e:
+            z, pooled = self.wrapped(tokens_orig)
+
+            # z = self.encode_with_transformers__(tokens_bak)
+        if z.device != devices.device:
+            z = z.to(device=devices.device)
+        # if z.dtype != devices.dtype:
+        #     z = z.to(dtype=devices.dtype)
+        # if pooled.dtype != devices.dtype:
+        #     pooled = pooled.to(dtype=devices.dtype)
+        z.pooled = pooled
+        return (z, pooled) if return_pooled else z
+
+class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, ClipTextEncoderCustom, PopulateVars):
     def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
         self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
@@ -94,96 +206,13 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
     def encode_token_weights(self, tokens):
         pass
 
-    def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        This function is different from `clip.cond_stage_model.encode_token_weights()`
-        in that the tokens are `List[List[int]]`, not including the weights.
-
-        Originally from `sd1_clip.py`: `encode()` -> `forward()`
-        '''
-        tokens_orig = tokens
-        try:
-            if isinstance(tokens, torch.Tensor):
-                tokens = tokens.tolist()
-            z, pooled = self.wrapped(tokens)
-        except Exception as e:
-            z, pooled = self.wrapped(tokens_orig)
-
-        if z.device != devices.device:
-            z = z.to(device=devices.device)
-        # if z.dtype != devices.dtype:
-        #     z = z.to(dtype=devices.dtype)
-        # if pooled.dtype != devices.dtype:
-        #     pooled = pooled.to(dtype=devices.dtype)
-        z.pooled = pooled
-        return (z, pooled) if return_pooled else z
-
-    def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
-        def forward(self, tokens):
-            backup_embeds = self.transformer.get_input_embeddings()
-            device = backup_embeds.weight.device
-            tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
-            tokens = torch.LongTensor(tokens).to(device)
-
-            # dtype=backup_embeds.weight.dtype
-            dtype=self.transformer.text_model.final_layer_norm.weight.dtype
-            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
-            if dtype_num(dtype) >= 32:
-                dtype=torch.float16 if model_management.should_use_fp16(device,prioritize_performance=False) else dtype
-            token_embedding_dtype = position_embedding_dtype = torch.float32
-            self.transformer.text_model.embeddings.position_embedding.to(dtype)
-            self.transformer.text_model.embeddings.token_embedding.to(dtype)
-
-            if dtype != torch.float32:
-                precision_scope = torch.autocast
-            else:
-                precision_scope = lambda a, b=None: contextlib.nullcontext(a)
-
-            with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
-                outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
-                self.transformer.set_input_embeddings(backup_embeds)
-
-                if self.layer == "last":
-                    z = outputs.last_hidden_state
-                elif self.layer == "pooled":
-                    z = outputs.pooler_output[:, None, :]
-                else:
-                    z = outputs.hidden_states[self.layer_idx]
-                    if self.layer_norm_hidden_state:
-                        z = self.transformer.text_model.final_layer_norm(z.to(dtype)) # (z)
-
-                pooled_output = outputs.pooler_output
-                if self.text_projection is not None:
-                    pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
-            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
-            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
-            return z.float(), pooled_output.float()
-
-        tokens_orig = tokens
-        try:
-            if isinstance(tokens, torch.Tensor):
-                tokens = tokens.tolist()
-            z, pooled = forward(self.wrapped, tokens) # self.wrapped.encode(tokens)
-        except Exception as e:
-            z, pooled = forward(self.wrapped, tokens_orig)
-
-            # z = self.encode_with_transformers__(tokens_bak)
-        if z.device != devices.device:
-            z = z.to(device=devices.device)
-        # if z.dtype != devices.dtype:
-        #     z = z.to(dtype=devices.dtype)
-        # if pooled.dtype != devices.dtype:
-        #     pooled = pooled.to(dtype=devices.dtype)
-        z.pooled = pooled
-        return (z, pooled) if return_pooled else z
-
     def tokenize(self, texts):
         # assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
         return tokenized
 
 
-class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, PopulateVars):
+class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCustomWords, ClipTextEncoderCustom, PopulateVars):
     '''
     Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
     '''
@@ -200,90 +229,6 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
 
     def encode_with_transformers(self, tokens, return_pooled=False):
         return self.encode_with_transformers_comfy_(tokens, return_pooled)
-
-    def encode_with_transformers_comfy(self, tokens: List[List[int]], return_pooled=False) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        This function is different from `clip.cond_stage_model.encode_token_weights()`
-        in that the tokens are `List[List[int]]`, not including the weights.
-
-        Originally from `sd1_clip.py`: `encode()` -> `forward()`
-        '''
-        tokens_orig = tokens
-        try:
-            if isinstance(tokens, torch.Tensor):
-                tokens = tokens.tolist()
-            z, pooled = self.wrapped(tokens) # self.wrapped.encode(tokens)
-        except Exception as e:
-            z, pooled = self.wrapped(tokens_orig)
-
-            # z = self.encode_with_transformers__(tokens_bak)
-        if z.device != devices.device:
-            z = z.to(device=devices.device)
-        # if z.dtype != devices.dtype:
-        #     z = z.to(dtype=devices.dtype)
-        # if pooled.dtype != devices.dtype:
-        #     pooled = pooled.to(dtype=devices.dtype)
-        z.pooled = pooled
-        return (z, pooled) if return_pooled else z
-
-    def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
-        def forward(self, tokens):
-            backup_embeds = self.transformer.get_input_embeddings()
-            device = backup_embeds.weight.device
-            tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
-            tokens = torch.LongTensor(tokens).to(device)
-
-            # dtype=backup_embeds.weight.dtype
-            dtype=self.transformer.text_model.final_layer_norm.weight.dtype
-            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
-            if dtype_num(dtype) >= 32:
-                dtype=torch.float16 if model_management.should_use_fp16(device,prioritize_performance=False) else dtype
-            token_embedding_dtype = position_embedding_dtype = torch.float32
-            self.transformer.text_model.embeddings.position_embedding.to(dtype)
-            self.transformer.text_model.embeddings.token_embedding.to(dtype)
-
-            if dtype != torch.float32:
-                precision_scope = torch.autocast
-            else:
-                precision_scope = lambda a, b=None: contextlib.nullcontext(a)
-
-            with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
-                outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
-                self.transformer.set_input_embeddings(backup_embeds)
-
-                if self.layer == "last":
-                    z = outputs.last_hidden_state
-                elif self.layer == "pooled":
-                    z = outputs.pooler_output[:, None, :]
-                else:
-                    z = outputs.hidden_states[self.layer_idx]
-                    if self.layer_norm_hidden_state:
-                        z = self.transformer.text_model.final_layer_norm(z.to(dtype)) # (z)
-
-                pooled_output = outputs.pooler_output
-                if self.text_projection is not None:
-                    pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
-            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
-            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
-            return z.float(), pooled_output.float()
-
-        tokens_orig = tokens
-        try:
-            if isinstance(tokens, torch.Tensor):
-                tokens = tokens.tolist()
-            z, pooled = forward(self.wrapped, tokens) # self.wrapped.encode(tokens)
-        except Exception as e:
-            z, pooled = forward(self.wrapped, tokens_orig)
-
-            # z = self.encode_with_transformers__(tokens_bak)
-        if z.device != devices.device:
-            z = z.to(device=devices.device)
-        # if z.dtype != devices.dtype:
-        #     z = z.to(dtype=devices.dtype)
-        # if pooled.dtype != devices.dtype:
-        #     pooled = pooled.to(dtype=devices.dtype)
-        z.pooled = pooled
-        return (z, pooled) if return_pooled else z
 
     def tokenize_line(self, line):
         line = parse_and_register_embeddings(self, line)
@@ -792,7 +737,9 @@ def prompt_handler(json_data):
                         print(f'[smZNodes] id: {current_clip_id} | steps: {steps}')
     tmp()
     return json_data
-PromptServer.instance.add_on_prompt_handler(prompt_handler)
+
+if hasattr(PromptServer.instance, 'add_on_prompt_handler'):
+    PromptServer.instance.add_on_prompt_handler(prompt_handler)
 
 # ========================================================================
 def bounded_modulo(number, modulo_value):
@@ -820,8 +767,8 @@ def calc_cond(c, current_step):
                 _cond = _cond + ls2
     return _cond
 
-comfy.samplers.CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
-class CFGNoisePredictor(comfy.samplers.CFGNoisePredictorOrig):
+CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
+class CFGNoisePredictor(CFGNoisePredictorOrig):
     def __init__(self, model):
         super().__init__(model)
         self.step = 0
@@ -870,6 +817,71 @@ class CFGNoisePredictor(comfy.samplers.CFGNoisePredictorOrig):
             conds_list = c.get('conds_list', [[(0, 1.0)]])
             image_cond = txt2img_image_conditioning(None, x)
             out = self.inner_model2(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
+        return out
+
+class CFGNoisePredictor_(torch.nn.Module):
+    def forward(self, input, sigma, **kwargs):
+        x=input
+        timestep=sigma
+        cond = kwargs['cond']
+        uncond = kwargs['uncond']
+        cond_scale = kwargs['cond_scale']
+        model_options = kwargs.get('model_options', {})
+
+        if not hasattr(self, 'step'):
+            self.step = 0
+
+        if not hasattr(self, 'inner_model_cfg'):
+            self.inner_model_cfg = CFGDenoiser(self.inner_model.inner_model.apply_model)
+            # self.inner_model_cfg = CFGDenoiser(self.forward_orig)
+
+        cc=calc_cond(cond, self.step)
+        uu=calc_cond(uncond, self.step)
+        self.step += 1
+
+        if (any([p[1].get('from_smZ', False) for p in cc]) or 
+            any([p[1].get('from_smZ', False) for p in uu])):
+            if model_options.get('transformer_options',None) is None:
+                model_options['transformer_options'] = {}
+            model_options['transformer_options']['from_smZ'] = True
+
+        kwargs['cond'] = cc
+        kwargs['uncond'] = uu
+        kwargs['model_options'] = model_options
+
+        if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
+            # out = super().apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
+            out = self.forward_orig(input, sigma, **kwargs)
+        else:
+            # Only supports one cond
+            for ix in range(len(cc)):
+                if cc[ix][1].get('from_smZ', False):
+                    cc = [cc[ix]]
+                    break
+            for ix in range(len(uu)):
+                if uu[ix][1].get('from_smZ', False):
+                    uu = [uu[ix]]
+                    break
+            c=cc[0][1]
+            u=uu[0][1]
+            _cc = cc[0][0]
+            _uu = uu[0][0]
+            x.c_adm = None
+            # def apply_c_adm(x)
+            if c.get("adm_encoded", None) is not None:
+                x.c_adm = torch.cat([c['adm_encoded'], u['adm_encoded']])
+                # SDXL. Need to pad with repeats
+                _cc, _uu = expand(_cc, _uu)
+                _uu, _cc = expand(_uu, _cc)
+            conds_list = c.get('conds_list', [[(0, 1.0)]])
+            image_cond = txt2img_image_conditioning(None, x)
+            apply_model_orig = self.inner_model.apply_model
+            try:
+                self.inner_model.apply_model = lambda x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None: self.inner_model_cfg(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
+                out = self.forward_orig(input, sigma, **kwargs)
+                # out = self.inner_model_cfg(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
+            finally:
+                self.inner_model.apply_model = apply_model_orig
         return out
 
 def txt2img_image_conditioning(sd_model, x, width=None, height=None):
@@ -946,6 +958,18 @@ def inject_code(original_func, data):
         for i, line in enumerate(lines):
             if item['target_line'] in line:
                 target_line_number = i + 1
+
+                # Find the indentation of the line where the new code will be inserted
+                indentation = ''
+                for char in line:
+                    if char == ' ':
+                        indentation += char
+                    else:
+                        break
+                
+                # Indent the new code to match the original
+                code_to_insert = dedent(item['code_to_insert'])
+                code_to_insert = indent(code_to_insert, indentation)
                 break
 
         if target_line_number is None:
@@ -954,7 +978,7 @@ def inject_code(original_func, data):
             # return original_func
 
         # Insert the code to be injected after the target line
-        lines.insert(target_line_number, item['code_to_insert'])
+        lines.insert(target_line_number, code_to_insert)
 
     # Recreate the modified source code
     modified_source = "\n".join(lines)

@@ -1,5 +1,6 @@
-import { app } from "../../../scripts/app.js";
-import { ComfyWidgets } from "../../../scripts/widgets.js";
+import { app } from "/scripts/app.js";
+// import { app } from "../../../scripts/app.js";
+// import { ComfyWidgets } from "../../../scripts/widgets.js";
 
 const ids = ["CLIP Text Encode++", "Settings (smZ)"]
 const widgets = ['parser', 'mean_normalization', 'multi_conditioning', 'use_old_emphasis_implementation', 'with_SDXL']
@@ -8,7 +9,7 @@ const getSetWidgets = ['parser', 'with_SDXL']
 let origProps = {};
 const HIDDEN_TAG = "smZhidden"
 
-const findWidgetByName = (node, name) => node.widgets.find((w) => (w._name ? w._name : w.name) === name);
+const findWidgetByName = (node, name) => node.widgets.find((w) => (w._name !== undefined && w._name ? w._name : w.name) === name);
 
 const doesInputWithNameExist = (node, name) => node.inputs ? node.inputs.some((input) => input.name === name) : false;
 

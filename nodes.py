@@ -1,12 +1,28 @@
+import torch
+import inspect
+from pathlib import Path
+import os
 from .modules import prompt_parser, devices, shared
 from .modules.sd_hijack import model_hijack
 from .smZNodes import run, prepare_noise
 from nodes import MAX_RESOLUTION
 import comfy.sd
 import comfy.model_management
-import torch
 import comfy.samplers
 import comfy.sample
+
+BOOLEAN = [False, True]
+try:
+    cwd_path = Path(__file__).parent
+    comfy_path = cwd_path.parent.parent
+    widgets_path = os.path.join(comfy_path, "web", "scripts", "widgets.js")
+    with open(widgets_path, encoding='utf8') as f:
+        widgets_js = f.read()
+    if 'BOOLEAN(' in widgets_js:
+        BOOLEAN = "BOOLEAN"
+    del widgets_js
+except Exception as err:
+    print("[smZNodes]:", err)
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -16,10 +32,10 @@ class smZ_CLIPTextEncode:
                 "clip": ("CLIP", ),
                 "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
                 # whether weights are normalized by taking the mean
-                "mean_normalization": ("BOOLEAN", {"default": True}),
-                "multi_conditioning": ("BOOLEAN", {"default": True}),
-                "use_old_emphasis_implementation": ("BOOLEAN", {"default": False}),
-                "with_SDXL": ("BOOLEAN", {"default": False}),
+                "mean_normalization": (BOOLEAN, {"default": True}),
+                "multi_conditioning": (BOOLEAN, {"default": True}),
+                "use_old_emphasis_implementation": (BOOLEAN, {"default": False}),
+                "with_SDXL": (BOOLEAN, {"default": False}),
                 "ascore": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
                 "width": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
                 "height": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
@@ -44,15 +60,20 @@ class smZ_CLIPTextEncode:
                crop_h, target_width, target_height, text_g, text_l, steps=1):
         params = locals()
         from .modules.shared import opts
-        devices.device = clip.patcher.load_device
+        devices.device = clip.patcher.load_device if hasattr(clip.patcher, 'load_device') else clip.device
         shared.device = devices.device
         is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
 
-        dtype = torch.float16 if comfy.model_management.should_use_fp16(device=devices.device) else torch.float32
-        devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else (_dtype if (_dtype:=clip.patcher.model_dtype() != None) else dtype)
+        should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_fp16)
+        if 'device' in should_use_fp16_signature.parameters:
+            should_use_fp16 = comfy.model_management.should_use_fp16(device=devices.device)
+        else:
+            should_use_fp16 = comfy.model_management.should_use_fp16()
+        dtype = torch.float16 if should_use_fp16 else torch.float32
+        devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else dtype
         devices.unet_needs_upcast = opts.upcast_sampling and devices.dtype == torch.float16 and devices.dtype_unet == torch.float16
         devices.dtype = devices.dtype_unet
-        devices.dtype_vae = comfy.model_management.vae_dtype()
+        devices.dtype_vae = comfy.model_management.vae_dtype() if hasattr(comfy.model_management, 'vae_dtype') else torch.float32
         params.pop('self', None)
         result = run(**params)
         result[0][0][1]['params'] = {}
@@ -89,37 +110,37 @@ class smZ_Settings:
                     "ㅤ"*1: ( "STRING", {"multiline": False, "default": "Stable Diffusion"}),
                     "info_comma_padding_backtrack": ("STRING", {"multiline": True, "default": "Prompt word wrap length limit\nin tokens - for texts shorter than specified, if they don't fit into 75 token limit, move them to the next 75 token chunk"}),
                     "Prompt word wrap length limit": ("INT", {"default": opts.comma_padding_backtrack, "min": 0, "max": 74, "step": 1}),
-                    # "enable_emphasis": ("BOOLEAN", {"default": opts.enable_emphasis}),
+                    # "enable_emphasis": (BOOLEAN, {"default": opts.enable_emphasis}),
                     "info_RNG": ("STRING", {"multiline": True, "default": "Random number generator source.\nchanges seeds drastically; use CPU to produce the same picture across different videocard vendors; use NV to produce same picture as on NVidia videocards"}),
                     "RNG": (["cpu", "gpu", "nv"],{"default": opts.rand_source}),
                     
                     "ㅤ"*2: ("STRING", {"multiline": False, "default": "Compute Settings"}),
                     "info_disable_nan_check": ("STRING", {"multiline": True, "default": "Disable NaN check in produced images/latent spaces"}),
-                    "disable_nan_check": ("BOOLEAN", {"default": opts.disable_nan_check}),
+                    "disable_nan_check": (BOOLEAN, {"default": opts.disable_nan_check}),
 
                     "ㅤ"*3: ("STRING", {"multiline": False, "default": "Sampler parameters"}),
                     "info_sgm_noise_multiplier": ("STRING", {"multiline": True, "default": "SGM noise multiplier\nmatch initial noise to official SDXL implementation - only useful for reproducing images\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/12818"}),
-                    "sgm_noise_multiplier": ("BOOLEAN", {"default": opts.sgm_noise_multiplier}),
+                    "sgm_noise_multiplier": (BOOLEAN, {"default": opts.sgm_noise_multiplier}),
                     "info_upcast_sampling": ("STRING", {"multiline": True, "default": "upcast sampling.\nNo effect with --force-fp32. Usually produces similar results to --force-fp32 with better performance while using less memory."}),
-                    "upcast_sampling": ("BOOLEAN", {"default": opts.upcast_sampling}),
+                    "upcast_sampling": (BOOLEAN, {"default": opts.upcast_sampling}),
 
                     "ㅤ"*3: ("STRING", {"multiline": False, "default": "Optimizations"}),
                     "info_NGMS": ("STRING", {"multiline": True, "default": "Negative Guidance minimum sigma\nskip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177"}),
                     "NGMS": ("FLOAT", {"default": opts.s_min_uncond, "min": 0.0, "max": 4.0, "step": 0.01}),
                     "info_pad_cond_uncond": ("STRING", {"multiline": True, "default": "Pad prompt/negative prompt to be same length\nimproves performance when prompt and negative prompt have different lengths; changes seeds"}),
-                    "pad_cond_uncond": ("BOOLEAN", {"default": opts.pad_cond_uncond}),
+                    "pad_cond_uncond": (BOOLEAN, {"default": opts.pad_cond_uncond}),
                     "info_batch_cond_uncond": ("STRING", {"multiline": True, "default": "Batch cond/uncond\ndo both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed – on by default for SDXL"}),
-                    "batch_cond_uncond": ("BOOLEAN", {"default": opts.batch_cond_uncond}),
+                    "batch_cond_uncond": (BOOLEAN, {"default": opts.batch_cond_uncond}),
 
                     "ㅤ"*4: ("STRING", {"multiline": False, "default": "Compatibility"}),
                     "info_use_prev_scheduling": ("STRING", {"multiline": True, "default": "Previous prompt editing timelines\nFor [red:green:N]; previous: If N < 1, it's a fraction of steps (and hires fix uses range from 0 to 1), if N >= 1, it's an absolute number of steps; new: If N has a decimal point in it, it's a fraction of steps (and hires fix uses range from 1 to 2), othewrwise it's an absolute number of steps"}),
-                    "Use previous prompt editing timelines": ("BOOLEAN", {"default": opts.use_old_scheduling}),
+                    "Use previous prompt editing timelines": (BOOLEAN, {"default": opts.use_old_scheduling}),
 
                     "ㅤ"*5: ("STRING", {"multiline": False, "default": "Experimental"}),
                     "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to get identical images regardless of the prompt."}),
-                    "Use CFGDenoiser": ("BOOLEAN", {"default": opts.use_CFGDenoiser}),
+                    "Use CFGDenoiser": (BOOLEAN, {"default": opts.use_CFGDenoiser}),
                     "info_debug": ("STRING", {"multiline": True, "default": "Debugging messages in the console."}),
-                    "Debug": ("BOOLEAN", {"default": opts.debug, "label_on": "on", "label_off": "off"}),
+                    "Debug": (BOOLEAN, {"default": opts.debug, "label_on": "on", "label_off": "off"}),
                 }}
     RETURN_TYPES = (anytype,)
     RETURN_NAMES = ("ANY",)
@@ -131,7 +152,7 @@ class smZ_Settings:
         from .modules.shared import opts
         device = comfy.model_management.text_encoder_device()
 
-        _any = kwargs.pop('any')
+        _any = kwargs.pop('any', None)
         kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
         kwargs['comma_padding_backtrack'] = kwargs.pop('Prompt word wrap length limit')
         kwargs['comma_padding_backtrack'] = max(min(kwargs['comma_padding_backtrack'], 74), 0)
@@ -143,7 +164,7 @@ class smZ_Settings:
         [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
         for k,v in kwargs.items():
             setattr(opts, k, v)
-        
+
         if opts.randn_source == 'cpu':
             if hasattr(comfy.sample, 'prepare_noise_orig'):
                 comfy.sample.prepare_noise = comfy.sample.prepare_noise_orig

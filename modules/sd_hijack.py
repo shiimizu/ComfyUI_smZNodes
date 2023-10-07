@@ -1,7 +1,6 @@
 import torch
 import comfy
 import comfy.sd1_clip
-import comfy.sdxl_clip
 from torch.nn.functional import silu
 from types import MethodType
 from comfy.sd import CLIP
@@ -106,7 +105,7 @@ class StableDiffusionModelHijack:
             errors.display(e, "applying optimizations")
             undo_optimizations()
 
-    def hijack(self, m: comfy.sd1_clip.SD1ClipModel|comfy.sdxl_clip.SDXLClipG):
+    def hijack(self, m: comfy.sd1_clip.SD1ClipModel):
         model_embeddings = m.transformer.text_model.embeddings
         model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
         model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight').to(device=devices.device)

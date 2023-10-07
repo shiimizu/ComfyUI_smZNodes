@@ -112,7 +112,7 @@ class smZ_Settings:
                     "Prompt word wrap length limit": ("INT", {"default": opts.comma_padding_backtrack, "min": 0, "max": 74, "step": 1}),
                     # "enable_emphasis": (BOOLEAN, {"default": opts.enable_emphasis}),
                     "info_RNG": ("STRING", {"multiline": True, "default": "Random number generator source.\nchanges seeds drastically; use CPU to produce the same picture across different videocard vendors; use NV to produce same picture as on NVidia videocards"}),
-                    "RNG": (["cpu", "gpu", "nv"],{"default": opts.rand_source}),
+                    "RNG": (["cpu", "gpu", "nv"],{"default": opts.randn_source}),
                     
                     "ㅤ"*2: ("STRING", {"multiline": False, "default": "Compute Settings"}),
                     "info_disable_nan_check": ("STRING", {"multiline": True, "default": "Disable NaN check in produced images/latent spaces"}),
@@ -172,6 +172,9 @@ class smZ_Settings:
             if not hasattr(comfy.sample, 'prepare_noise_orig'):
                 comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
             import functools
+            if opts.randn_source == 'gpu':
+                if device == torch.device("cpu") or device == "cpu":
+                    device = comfy.model_management.get_torch_device()
             _prepare_noise = functools.partial(prepare_noise, device=device)
             comfy.sample.prepare_noise = _prepare_noise
 

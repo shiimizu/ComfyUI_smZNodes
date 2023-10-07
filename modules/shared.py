@@ -59,7 +59,7 @@ opts.max_chunk_count = 0
 opts.return_batch_chunks = False
 opts.noise = None
 opts.pad_with_repeats = True
-opts.rand_source = "cpu"
+opts.randn_source = "cpu"
 opts.lora_functional = False
 opts.use_old_scheduling = False
 

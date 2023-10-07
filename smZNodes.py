@@ -524,12 +524,12 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     from .modules.shared import opts
     from comfy.sample import np
     generator = torch.Generator(device).manual_seed(seed)
-    if opts.rand_source == 'nv':
+    if opts.randn_source == 'nv':
         from .modules import rng_philox
         rng = rng_philox.Generator(seed)
     if noise_inds is None:
         shape = latent_image.size()
-        if opts.rand_source == 'nv':
+        if opts.randn_source == 'nv':
             return torch.asarray(rng.randn(shape), device=device)
         else:
             return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)
@@ -538,7 +538,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     noises = []
     for i in range(unique_inds[-1]+1):
         shape = [1] + list(latent_image.size())[1:]
-        if opts.rand_source == 'nv':
+        if opts.randn_source == 'nv':
             noise = torch.asarray(rng.randn(shape), device=device)
         else:
             noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)

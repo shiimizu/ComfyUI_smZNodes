@@ -64,7 +64,7 @@ opts.lora_functional = False
 opts.use_old_scheduling = False
 
 opts.use_CFGDenoiser = False
-opts.sgm_noise_multiplier = False
+opts.sgm_noise_multiplier = True
 opts.debug= False
 
 

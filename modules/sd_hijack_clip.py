@@ -1,3 +1,4 @@
+from __future__ import annotations
 import math
 from collections import namedtuple
 import torch
@@ -5,7 +6,6 @@ from . import prompt_parser, devices, sd_hijack
 from .shared import opts
 from comfy.sd1_clip import SD1ClipModel
 from comfy.sdxl_clip import SDXLClipModel
-
 
 class PromptChunk:
     """

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import comfy
 import torch
 from comfy.sd import CLIP

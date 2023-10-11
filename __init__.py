@@ -109,15 +109,19 @@ else:
     _sample = comfy.samplers.sample
     _wrap_model = comfy.samplers.wrap_model
 
-    def get_value_from_args(args, kwargs, key_to_lookup, fn):
+    def get_value_from_args(args, kwargs, key_to_lookup, fn, idx=None):
         arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
         value = None
         if key_to_lookup in kwargs:
             value = kwargs[key_to_lookup]
         else:
-            # Get its position in the formal parameters list and retrieve from args
-            index = arg_names.index(key_to_lookup)
-            value = args[index] if index < len(args) else None
+            try:
+                # Get its position in the formal parameters list and retrieve from args
+                index = arg_names.index(key_to_lookup)
+                value = args[index] if index < len(args) else None
+            except Exception as err:
+                if idx is not None and idx < len(args):
+                    value = args[idx]
         return value
 
     def KSampler_sample(*args, **kwargs):
@@ -127,9 +131,9 @@ else:
         return _KSampler_sample(*args, **kwargs)
 
     def sample(*args, **kwargs):
-        model = get_value_from_args(args, kwargs, 'model', _sample)
-        positive = get_value_from_args(args, kwargs, 'positive', _sample)
-        negative = get_value_from_args(args, kwargs, 'negative', _sample)
+        model = get_value_from_args(args, kwargs, 'model', _sample, 0)
+        positive = get_value_from_args(args, kwargs, 'positive', _sample, 2)
+        negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
         model.from_smZ = (any([_p[1].get('from_smZ', False) for _p in positive]) or 
             any([_p[1].get('from_smZ', False) for _p in negative]))
         return _sample(*args, **kwargs)

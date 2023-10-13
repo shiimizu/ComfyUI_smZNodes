@@ -6,8 +6,6 @@ import torch
 from torch import einsum
 
 from comfy import ldm
-# from ldm.modules.attention import ldm.modules.attention.CrossAttention
-# from ldm.modules.diffusionmodules.model import ldm.modules.diffusionmodules.model.AttnBlock, MemoryEfficientAttnBlockPytorch
 from ldm.util import default
 from einops import rearrange
 
@@ -15,22 +13,24 @@ from . import shared, errors, devices
 from ldm.modules import sub_quadratic_attention
 from .hypernetworks import hypernetwork
 
-# import # sgm.modules.attention
-# import # sgm.modules.diffusionmodules.model
-# sgm_diffusionmodules_model_AttnBlock_forward = sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward
-ls = [ldm.modules.attention.CrossAttention,
-        ldm.modules.attention.CrossAttentionPytorch,
-        ldm.modules.attention.CrossAttentionBirchSan,
-        ldm.modules.diffusionmodules.model.AttnBlock,
-        ldm.modules.diffusionmodules.model.MemoryEfficientAttnBlockPytorch,
-        ]
+def apply_funcs(undo=False):
+    def _apply_funcs(class_name):
+        module = ldm.modules.diffusionmodules.model if "Attn" in class_name else ldm.modules.attention
+        if not hasattr(module, class_name): return
+        m = getattr(module, class_name, object())
+        if not hasattr(m, "forward_orig") and hasattr(m, "forward"):
+            setattr(m, "forward_orig", m.forward)
+        if undo and hasattr(m, "forward_orig"):
+            setattr(m, "forward", m.forward_orig)
+    cross_attention = ["CrossAttention", "MemoryEfficientCrossAttention", "CrossAttentionPytorch", "CrossAttentionBirchSan"]
+    attn_block = ["AttnBlock", "MemoryEfficientAttnBlock", "MemoryEfficientAttnBlockPytorch"]
+    for class_name in cross_attention+attn_block:
+        _apply_funcs(class_name)
+apply_funcs()
 
-def apply_funcs(m):
-    if not hasattr(m, "forward_orig"):
-        m.forward_orig = m.forward
-for x in ls:
-    apply_funcs(x)
-
+def apply_func(m, x, fn):
+    if hasattr(m, x):
+        setattr(getattr(m, x, object()), 'forward', fn)
 
 
 class SdOptimization:
@@ -56,12 +56,7 @@ class SdOptimization:
 
 
 def undo():
-    def restore_funcs(m):
-        if hasattr(m, "forward_orig"):
-            m.forward = m.forward_orig
-    for x in ls:
-        restore_funcs(x)
-
+    apply_funcs(undo=True)
     # ldm.modules.attention.CrossAttention.forward = hypernetwork.attention_ldm.modules.attention.CrossAttention_forward
     # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = hypernetwork.attention_ldm.modules.attention.CrossAttention_forward
     # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = sgm_diffusionmodules_model_AttnBlock_forward
@@ -76,10 +71,9 @@ class SdOptimizationXformers(SdOptimization):
         return shared.cmd_opts.force_enable_xformers or (shared.xformers_available and torch.cuda.is_available() and (6, 0) <= torch.cuda.get_device_capability(shared.device) <= (9, 0))
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = xformers_attention_forward
-        ldm.modules.diffusionmodules.model.AttnBlock.forward = xformers_attnblock_forward
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = xformers_attention_forward
-        # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = xformers_attnblock_forward
+        apply_func(ldm.modules.attention, 'CrossAttention', xformers_attention_forward)
+        apply_func(ldm.modules.attention, 'MemoryEfficientCrossAttention', xformers_attention_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'MemoryEfficientAttnBlock', xformers_attnblock_forward)
 
 
 class SdOptimizationSdpNoMem(SdOptimization):
@@ -92,12 +86,10 @@ class SdOptimizationSdpNoMem(SdOptimization):
         return hasattr(torch.nn.functional, "scaled_dot_product_attention") and callable(torch.nn.functional.scaled_dot_product_attention)
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = scaled_dot_product_no_mem_attention_forward
-        ldm.modules.diffusionmodules.model.AttnBlock.forward = sdp_no_mem_attnblock_forward
-        ldm.modules.attention.CrossAttentionPytorch.forward = scaled_dot_product_no_mem_attention_forward
-        ldm.modules.diffusionmodules.model.MemoryEfficientAttnBlockPytorch.forward = sdp_no_mem_attnblock_forward
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = scaled_dot_product_no_mem_attention_forward
-        # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = sdp_no_mem_attnblock_forward
+        apply_func(ldm.modules.attention, 'CrossAttention', scaled_dot_product_no_mem_attention_forward)
+        apply_func(ldm.modules.attention, 'CrossAttentionPytorch', scaled_dot_product_no_mem_attention_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'AttnBlock', sdp_no_mem_attnblock_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'MemoryEfficientAttnBlock', sdp_no_mem_attnblock_forward)
 
 
 class SdOptimizationSdp(SdOptimizationSdpNoMem):
@@ -107,10 +99,9 @@ class SdOptimizationSdp(SdOptimizationSdpNoMem):
     priority = 70
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = scaled_dot_product_attention_forward
-        ldm.modules.diffusionmodules.model.AttnBlock.forward = sdp_attnblock_forward
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = scaled_dot_product_attention_forward
-        # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = sdp_attnblock_forward
+        apply_func(ldm.modules.attention, 'CrossAttention', scaled_dot_product_attention_forward)
+        apply_func(ldm.modules.attention, 'CrossAttentionPytorch', scaled_dot_product_attention_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'AttnBlock', sdp_attnblock_forward)
 
 
 class SdOptimizationSubQuad(SdOptimization):
@@ -119,14 +110,9 @@ class SdOptimizationSubQuad(SdOptimization):
     priority = 10
 
     def apply(self):
-        # ldm.modules.attention.CrossAttention.forward = sub_quad_attention_forward
-        ldm.modules.diffusionmodules.model.AttnBlock.forward = sub_quad_attnblock_forward
-
-        ldm.modules.attention.CrossAttentionBirchSan.forward = sub_quad_attention_forward
-
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = sub_quad_attention_forward
-        # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = sub_quad_attnblock_forward
-
+        apply_func(ldm.modules.attention, 'CrossAttention', sub_quad_attention_forward)
+        apply_func(ldm.modules.attention, 'CrossAttentionBirchSan', sub_quad_attention_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'AttnBlock', sub_quad_attnblock_forward)
 
 class SdOptimizationV1(SdOptimization):
     name = "V1"
@@ -135,8 +121,8 @@ class SdOptimizationV1(SdOptimization):
     priority = 10
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward_v1
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward_v1
+        apply_func(ldm.modules.attention, 'CrossAttention', split_cross_attention_forward_v1)
+        apply_func(ldm.modules.attention, 'CrossAttentionPytorch', split_cross_attention_forward_v1)
 
 
 class SdOptimizationInvokeAI(SdOptimization):
@@ -148,8 +134,8 @@ class SdOptimizationInvokeAI(SdOptimization):
         return 1000 if not torch.cuda.is_available() else 10
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward_invokeAI
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward_invokeAI
+        apply_func(ldm.modules.attention, 'CrossAttention', split_cross_attention_forward_invokeAI)
+        apply_func(ldm.modules.attention, 'CrossAttentionPytorch', split_cross_attention_forward_invokeAI)
 
 
 class SdOptimizationDoggettx(SdOptimization):
@@ -158,10 +144,9 @@ class SdOptimizationDoggettx(SdOptimization):
     priority = 90
 
     def apply(self):
-        ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward
-        ldm.modules.diffusionmodules.model.AttnBlock.forward = cross_attention_attnblock_forward
-        # sgm.modules.attention.ldm.modules.attention.CrossAttention.forward = split_cross_attention_forward
-        # sgm.modules.diffusionmodules.model.ldm.modules.diffusionmodules.model.AttnBlock.forward = cross_attention_attnblock_forward
+        apply_func(ldm.modules.attention, 'CrossAttention', split_cross_attention_forward)
+        apply_func(ldm.modules.attention, 'CrossAttentionPytorch', split_cross_attention_forward)
+        apply_func(ldm.modules.diffusionmodules.model, 'AttnBlock', cross_attention_attnblock_forward)
 
 
 def list_optimizers(res):
@@ -174,14 +159,6 @@ def list_optimizers(res):
         SdOptimizationInvokeAI(),
         SdOptimizationDoggettx(),
     ])
-
-
-if shared.cmd_opts.xformers or shared.cmd_opts.force_enable_xformers:
-    try:
-        import xformers.ops
-        shared.xformers_available = True
-    except Exception:
-        errors.report("Cannot import xformers", exc_info=True)
 
 
 def get_available_vram():

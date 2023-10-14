@@ -1,6 +1,7 @@
 import torch
 import inspect
 from pathlib import Path
+from functools import partial
 import os
 from .modules import prompt_parser, devices, shared
 from .modules.sd_hijack import model_hijack
@@ -60,20 +61,26 @@ class smZ_CLIPTextEncode:
                crop_h, target_width, target_height, text_g, text_l, steps=1):
         params = locals()
         from .modules.shared import opts
-        devices.device = clip.patcher.load_device if hasattr(clip.patcher, 'load_device') else clip.device
-        shared.device = devices.device
         is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
 
         should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_fp16)
-        if 'device' in should_use_fp16_signature.parameters:
-            should_use_fp16 = comfy.model_management.should_use_fp16(device=devices.device)
+        _p = should_use_fp16_signature.parameters
+        devices.device = shared.device = clip.patcher.load_device if hasattr(clip.patcher, 'load_device') else clip.device
+        if 'device' in _p and 'prioritize_performance' in _p:
+            should_use_fp16 = partial(comfy.model_management.should_use_fp16, device=devices.device, prioritize_performance=False)
+        elif 'device' in should_use_fp16_signature.parameters:
+            should_use_fp16 = partial(comfy.model_management.should_use_fp16, device=devices.device)
         else:
-            should_use_fp16 = comfy.model_management.should_use_fp16()
-        dtype = torch.float16 if should_use_fp16 else torch.float32
-        devices.dtype_unet = torch.float16 if is_sdxl and not comfy.model_management.FORCE_FP32 else dtype
+            should_use_fp16 = comfy.model_management.should_use_fp16
+        dtype = torch.float16 if should_use_fp16() else torch.float32
+        dtype_unet= dtype
+        devices.dtype = dtype
+        #  devices.dtype_unet was hijacked so it will be the correct dtype by default
+        if devices.dtype_unet == torch.float16:
+            devices.dtype_unet = dtype_unet
         devices.unet_needs_upcast = opts.upcast_sampling and devices.dtype == torch.float16 and devices.dtype_unet == torch.float16
-        devices.dtype = devices.dtype_unet
         devices.dtype_vae = comfy.model_management.vae_dtype() if hasattr(comfy.model_management, 'vae_dtype') else torch.float32
+
         params.pop('self', None)
         result = run(**params)
         result[0][0][1]['params'] = {}

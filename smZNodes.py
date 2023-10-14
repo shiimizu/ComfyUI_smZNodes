@@ -74,17 +74,15 @@ class ClipTextEncoderCustom:
         # dtype=backup_embeds.weight.dtype
         dtype=self.transformer.text_model.final_layer_norm.weight.dtype
         dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+        _p = should_use_fp16_signature.parameters
+        # newer versions of ComfyUI upcasts the transformer embeddings, which is technically correct
+        # when it's a newer version, we want to downcast it to torch.float16, so set newv=True
         newv = False
+        # newv = 'device' in _p and 'prioritize_performance' in _p # comment this to have default comfy behaviour
         if dtype_num(dtype) >= 32:
-            should_use_fp16 = devices.dtype
-            if 'device' in should_use_fp16_signature.parameters and 'prioritize_performance' in should_use_fp16_signature.parameters:
-                newv = True
-                should_use_fp16 = model_management.should_use_fp16(device=device, prioritize_performance=False)
-            elif 'device' in should_use_fp16_signature.parameters:
-                should_use_fp16 = model_management.should_use_fp16(device=device)
-            else:
-                should_use_fp16 = model_management.should_use_fp16()
-            dtype = torch.float16 if should_use_fp16 else dtype
+            newv = False
+        if newv:
+            dtype = devices.dtype if dtype != devices.dtype else dtype
         token_embedding_dtype = position_embedding_dtype = torch.float32
         if newv:
             self.transformer.text_model.embeddings.position_embedding.to(dtype)

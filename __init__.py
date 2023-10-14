@@ -171,3 +171,13 @@ else:
     comfy.samplers.sample = sample
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
 # comfy.samplers.wrap_model = wrap_model
+
+if hasattr(comfy.model_management, 'unet_dtype'):
+    comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype
+    from .modules import devices
+    def unet_dtype(device=None, model_params=0):
+        dtype = comfy.model_management.unet_dtype_orig(device=device, model_params=model_params)
+        if model_params != 0:
+            devices.dtype_unet = dtype
+        return dtype
+    comfy.model_management.unet_dtype = unet_dtype

@@ -15,6 +15,8 @@ from .hypernetworks import hypernetwork
 
 def apply_funcs(undo=False):
     def _apply_funcs(class_name):
+        import ldm.modules.diffusionmodules.model
+        import ldm.modules.attention
         module = ldm.modules.diffusionmodules.model if "Attn" in class_name else ldm.modules.attention
         if not hasattr(module, class_name): return
         m = getattr(module, class_name, object())

@@ -5,6 +5,10 @@ from torch.nn.functional import silu
 from types import MethodType
 from comfy.sd import CLIP
 from comfy import ldm
+import ldm.modules.diffusionmodules
+import ldm.modules.diffusionmodules.model
+import ldm.modules.diffusionmodules.openaimodel
+import ldm.modules.attention
 from . import devices, shared, sd_hijack_unet, sd_hijack_optimizations, script_callbacks, errors
 from .textual_inversion import textual_inversion
 from ..smZNodes import FrozenCLIPEmbedderWithCustomWordsCustom, FrozenOpenCLIPEmbedder2WithCustomWordsCustom, get_learned_conditioning

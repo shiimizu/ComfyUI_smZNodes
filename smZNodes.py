@@ -779,8 +779,14 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         self.is_prompt_editing_u = False
         self.is_prompt_editing_c = False
 
-    def apply_model(self, x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None):
-        
+    def apply_model(self, *args, **kwargs):
+        x=kwargs['x'] if 'x' in kwargs else args[0]
+        timestep=kwargs['timestep'] if 'timestep' in kwargs else args[1]
+        cond=kwargs['cond'] if 'cond' in kwargs else args[2]
+        uncond=kwargs['uncond'] if 'uncond' in kwargs else args[3]
+        cond_scale=kwargs['cond_scale'] if 'cond_scale' in kwargs else args[4]
+        model_options=kwargs['model_options'] if 'model_options' in kwargs else {}
+
         cc=calc_cond(cond, self.step)
         uu=calc_cond(uncond, self.step)
         self.step += 1
@@ -792,7 +798,15 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             model_options['transformer_options']['from_smZ'] = True
 
         if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
-            out = super().apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
+            if 'cond' in kwargs:
+                kwargs['cond'] = cc
+            else:
+                args[2]=cc
+            if 'uncond' in kwargs:
+                kwargs['uncond'] = uu
+            else:
+                args[3]=uu
+            out = super().apply_model(*args, **kwargs)
         else:
             # Only supports one cond
             for ix in range(len(cc)):

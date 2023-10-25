@@ -744,22 +744,31 @@ if hasattr(PromptServer.instance, 'add_on_prompt_handler'):
 def bounded_modulo(number, modulo_value):
     return number if number < modulo_value else modulo_value
 
+def get_adm(c):
+    for y in ["adm_encoded", "c_adm", "y"]:
+        if y in c:
+            c_c_adm = c[y]
+            if y == "adm_encoded": y="c_adm"
+            if type(c_c_adm) is not torch.Tensor: c_c_adm = c_c_adm.cond 
+            return {y: c_c_adm, 'key': y}
+    return None
 
+getp=lambda x: x[1] if type(x) is list else x
 def calc_cond(c, current_step):
     """Group by smZ conds that may do prompt-editing / regular conds / comfy conds."""
     _cond = []
     # Group by conds from smZ
-    fn=lambda x : x[1].get("from_smZ", None) is not None
+    fn=lambda x : getp(x).get("from_smZ", None) is not None
     an_iterator = itertools.groupby(c, fn )
     for key, group in an_iterator:
         ls=list(group)
         # Group by prompt-editing conds
-        fn2=lambda x : x[1].get("smZid", None)
+        fn2=lambda x : getp(x).get("smZid", None)
         an_iterator2 = itertools.groupby(ls, fn2)
         for key2, group2 in an_iterator2:
             ls2=list(group2)
             if key2 is not None:
-                orig_len = ls2[0][1].get('orig_len', 1)
+                orig_len = getp(ls2[0]).get('orig_len', 1)
                 i = bounded_modulo(current_step, orig_len - 1)
                 _cond = _cond + [ls2[i]]
             else:
@@ -791,43 +800,44 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         uu=calc_cond(uncond, self.step)
         self.step += 1
 
-        if (any([p[1].get('from_smZ', False) for p in cc]) or 
-            any([p[1].get('from_smZ', False) for p in uu])):
+        if (any([getp(p).get('from_smZ', False) for p in cc]) or 
+            any([getp(p).get('from_smZ', False) for p in uu])):
             if model_options.get('transformer_options',None) is None:
                 model_options['transformer_options'] = {}
             model_options['transformer_options']['from_smZ'] = True
 
         if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
-            if 'cond' in kwargs:
-                kwargs['cond'] = cc
-            else:
-                args[2]=cc
-            if 'uncond' in kwargs:
-                kwargs['uncond'] = uu
-            else:
-                args[3]=uu
+            if 'cond' in kwargs: kwargs['cond'] = cc
+            else: args[2]=cc
+            if 'uncond' in kwargs: kwargs['uncond'] = uu
+            else: args[3]=uu
             out = super().apply_model(*args, **kwargs)
         else:
             # Only supports one cond
             for ix in range(len(cc)):
-                if cc[ix][1].get('from_smZ', False):
+                if getp(cc[ix]).get('from_smZ', False):
                     cc = [cc[ix]]
                     break
             for ix in range(len(uu)):
-                if uu[ix][1].get('from_smZ', False):
+                if getp(uu[ix]).get('from_smZ', False):
                     uu = [uu[ix]]
                     break
-            c=cc[0][1]
-            u=uu[0][1]
-            _cc = cc[0][0]
-            _uu = uu[0][0]
-            if c.get("adm_encoded", None) is not None:
-                self.c_adm = torch.cat([c['adm_encoded'], u['adm_encoded']])
+            c=getp(cc[0])
+            u=getp(uu[0])
+            _cc = cc[0][0] if type(cc[0]) is list else cc[0]['model_conds']['c_crossattn'].cond
+            _uu = uu[0][0] if type(uu[0]) is list else uu[0]['model_conds']['c_crossattn'].cond
+            conds_list = c.get('conds_list', [[(0, 1.0)]])
+            if 'model_conds' in c: c = c['model_conds']
+            if 'model_conds' in u: u = u['model_conds']
+            c_c_adm = get_adm(c)
+            if c_c_adm is not None:
+                u_c_adm = get_adm(u)
+                k = c_c_adm['key']
+                self.c_adm = {k: torch.cat([c_c_adm[k], u_c_adm[u_c_adm['key']]]).to(device=x.device), 'key': k}
                 # SDXL. Need to pad with repeats
                 _cc, _uu = expand(_cc, _uu)
                 _uu, _cc = expand(_uu, _cc)
             x.c_adm = self.c_adm
-            conds_list = c.get('conds_list', [[(0, 1.0)]])
             image_cond = txt2img_image_conditioning(None, x)
             out = self.inner_model2(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
         return out

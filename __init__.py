@@ -134,8 +134,9 @@ else:
         model = get_value_from_args(args, kwargs, 'model', _sample, 0)
         positive = get_value_from_args(args, kwargs, 'positive', _sample, 2)
         negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
-        model.from_smZ = (any([_p[1].get('from_smZ', False) for _p in positive]) or 
-            any([_p[1].get('from_smZ', False) for _p in negative]))
+        get_p1 = lambda x: x[1] if type(x) is list else x
+        model.from_smZ = (any([get_p1(_p).get('from_smZ', False) for _p in positive]) or 
+            any([get_p1(_p).get('from_smZ', False) for _p in negative]))
         return _sample(*args, **kwargs)
 
     class Sampler(_Sampler):

@@ -69,9 +69,13 @@ def ApplyOptimizationsContext3(func):
 
 precision_scope_null = lambda a, b=None: contextlib.nullcontext(a)
 
-def apply_model(orig_func, self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None, control=None, transformer_options={}, *args, **kwargs):
+# def apply_model(orig_func, self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None, control=None, transformer_options={}, *args, **kwargs):
+def apply_model(orig_func, self, *args, **kwargs):
+    transformer_options = kwargs['transformer_options'] if 'transformer_options' in kwargs else {}
+    c_crossattn = kwargs['c_crossattn'] if 'c_crossattn' in kwargs else args[3]
+    x_noisy = kwargs['x_noisy'] if 'x_noisy' in kwargs else args[0]
     if not transformer_options.get('from_smZ', False):
-        return self.apply_model_orig(x_noisy, t, c_concat, c_crossattn, c_adm, control, transformer_options, **kwargs)
+        return self.apply_model_orig(*args, **kwargs)
 
     cond=c_crossattn
     if isinstance(cond, dict):
@@ -88,7 +92,7 @@ def apply_model(orig_func, self, x_noisy, t, c_concat=None, c_crossattn=None, c_
 
     with precision_scope(comfy.model_management.get_autocast_device(x_noisy.device)): # , torch.float32):
     # with devices.autocast():
-        out = orig_func(self, x_noisy, t, c_concat, cond, c_adm, control, transformer_options, **kwargs).float()
+        out = orig_func(self, *args, **kwargs).float()
     return out
 
 class GELUHijack(torch.nn.GELU, torch.nn.Module):

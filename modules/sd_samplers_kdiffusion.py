@@ -87,6 +87,13 @@ class CFGDenoiser(torch.nn.Module):
         c, uc = self.p.get_conds()
         self.sampler.sampler_extra_args['cond'] = c
         self.sampler.sampler_extra_args['uncond'] = uc
+    
+    def make_condition_dict(self, x, d):
+        if x.c_adm is not None:
+            k = x.c_adm['key']
+            d[k] = x.c_adm[k]
+        d['c_crossattn'] = d['c_crossattn'].to(device=x.device)
+        return d
 
     def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond):
         model_management.throw_exception_if_processing_interrupted()
@@ -115,7 +122,7 @@ class CFGDenoiser(torch.nn.Module):
 
         # if shared.sd_model.model.conditioning_key == "crossattn-adm":
         #     image_uncond = torch.zeros_like(image_cond)
-        #     make_condition_dict = lambda c_crossattn, c_adm: {"c_crossattn": c_crossattn, "c_adm": c_adm} # pylint: disable=C3001
+        #     make_condition_dict = lambda c_crossattn: {"c_crossattn": c_crossattn} # pylint: disable=C3001
         # else:
         #     image_uncond = image_cond
         #     if isinstance(uncond, dict):
@@ -128,18 +135,21 @@ class CFGDenoiser(torch.nn.Module):
         if False:
             image_uncond = torch.zeros_like(image_cond)
             if self.c_crossattn_as_list:
-                make_condition_dict = lambda c_crossattn, c_adm: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], "c_adm": c_adm, 'transformer_options': {'from_smZ': True}} # pylint: disable=C3001
+                make_condition_dict = lambda c_crossattn: {"c_crossattn": [ctn.to(device=self.device) for ctn in c_crossattn] if type(c_crossattn) is list else [c_crossattn.to(device=self.device)], 'transformer_options': {'from_smZ': True}} # pylint: disable=C3001
             else:
-                make_condition_dict = lambda c_crossattn, c_adm: {"c_crossattn": c_crossattn, "c_adm": c_adm, 'transformer_options': {'from_smZ': True}} # pylint: disable=C3001
+                make_condition_dict = lambda c_crossattn: {"c_crossattn": c_crossattn, 'transformer_options': {'from_smZ': True}} # pylint: disable=C3001
         else:
             image_uncond = image_cond
             if isinstance(uncond, dict):
-                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, "c_adm": x.c_adm, 'transformer_options': {'from_smZ': True}}
+                make_condition_dict = lambda c_crossattn, c_concat: {**c_crossattn, "c_concat": None, 'transformer_options': {'from_smZ': True}}
             else:
                 if self.c_crossattn_as_list:
-                    make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn if type(c_crossattn) is list else [c_crossattn], "c_concat": None, "c_adm": x.c_adm, 'transformer_options': {'from_smZ': True}}
+                    make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn if type(c_crossattn) is list else [c_crossattn], "c_concat": None, 'transformer_options': {'from_smZ': True}}
                 else:
-                    make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn, "c_concat": None, "c_adm": x.c_adm, 'transformer_options': {'from_smZ': True}}
+                    make_condition_dict = lambda c_crossattn, c_concat: {"c_crossattn": c_crossattn, "c_concat": None, 'transformer_options': {'from_smZ': True}}
+        
+        _make_condition_dict = make_condition_dict
+        make_condition_dict = lambda *a, **kwa: self.make_condition_dict(x, _make_condition_dict(*a, **kwa))
 
         if not is_edit_model:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])

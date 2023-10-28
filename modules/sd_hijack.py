@@ -110,11 +110,18 @@ class StableDiffusionModelHijack:
             undo_optimizations()
 
     def hijack(self, m: comfy.sd1_clip.SD1ClipModel):
+        tokenizer_parent = m.tokenizer # SD1Tokenizer
+        # SDTokenizer
+        tokenizer_parent2 = getattr(tokenizer_parent, tokenizer_parent.clip) if hasattr(tokenizer_parent, 'clip') else tokenizer_parent
+        tokenizer = getattr(tokenizer_parent, tokenizer_parent.clip).tokenizer if hasattr(tokenizer_parent, 'clip') else tokenizer_parent.tokenizer
+        if hasattr(m, 'clip'):
+            m = getattr(m, m.clip)
         model_embeddings = m.transformer.text_model.embeddings
         model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
         model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight').to(device=devices.device)
-        m.tokenizer_parent = m.tokenizer
-        m.tokenizer = m.tokenizer.tokenizer
+        m.tokenizer_parent = tokenizer_parent
+        m.tokenizer_parent2 = tokenizer_parent2
+        m.tokenizer = tokenizer
         m = FrozenOpenCLIPEmbedder2WithCustomWordsCustom(m, self) if "SDXLClipG" in type(m).__name__ else FrozenCLIPEmbedderWithCustomWordsCustom(m, self)
         m.clip_layer = getattr(m.wrapped, "clip_layer", None)
         m.reset_clip_layer = getattr(m.wrapped, "reset_clip_layer", None)
@@ -126,6 +133,8 @@ class StableDiffusionModelHijack:
         self.apply_optimizations()
 
     def undo_hijack(self, m):
+        # if hasattr(m, 'clip'):
+        #     m = getattr(m, m.clip, m)
         try:
             m = m.wrapped
             model_embeddings = m.transformer.text_model.embeddings

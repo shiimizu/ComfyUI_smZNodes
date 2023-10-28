@@ -167,7 +167,7 @@ class ClipTextEncoderCustom:
 
 class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, ClipTextEncoderCustom, PopulateVars):
     def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
-        self.populate_self_variables(wrapped.tokenizer_parent)
+        self.populate_self_variables(wrapped.tokenizer_parent2)
         super().__init__(wrapped, hijack)
         self.id_start = self.wrapped.tokenizer.bos_token_id
         self.id_end = self.wrapped.tokenizer.eos_token_id
@@ -216,7 +216,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
     Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
     '''
     def __init__(self, wrapped: comfy.sd1_clip.SD1ClipModel, hijack):
-        self.populate_self_variables(wrapped.tokenizer_parent) # SD1Tokenizer
+        self.populate_self_variables(wrapped.tokenizer_parent2) # SD1Tokenizer
         # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
         super().__init__(wrapped, hijack)
 
@@ -346,10 +346,8 @@ def get_valid_embeddings(embedding_directory):
 
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):
     from  builtins import any as b_any
-    def inverse_substring(s, start, end, offset = 0):
-        return s[:start-offset] + s[end-offset:]
-
-    embs = get_valid_embeddings(self.wrapped.tokenizer_parent.embedding_directory)
+    embedding_directory = self.wrapped.tokenizer_parent2.embedding_directory
+    embs = get_valid_embeddings(embedding_directory)
     embs_str = '|'.join(embs)
     emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
@@ -360,7 +358,7 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
         embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
         embedding_name = embedding_sname + ext
         if embedding_name:
-            embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
+            embed, _ = self.wrapped.tokenizer_parent2._try_get_embedding(embedding_name)
             if embed is not None:
                 found=True
                 if opts.debug:
@@ -421,7 +419,7 @@ class ClipTokenWeightEncoder:
                 cond.pooled = pooled
                 cond.pooled.conds_list = conds_list
                 cond.pooled.schedules = schedules
-            elif type(token_weight_pairs) == list and type(token_weight_pairs[0]) == list and type(token_weight_pairs[0][0]) == tuple:
+            else:
                 # comfy++
                 def encode_toks(_token_weight_pairs):
                     zs = []
@@ -436,6 +434,9 @@ class ClipTokenWeightEncoder:
                     zcond = torch.hstack(zs)
                     zcond.pooled = first_pooled
                     return zcond
+                # non-sdxl will be something like: {"l": [[]]}
+                if isinstance(token_weight_pairs, dict):
+                    token_weight_pairs = next(iter(token_weight_pairs.values()))
                 cond = encode_toks(token_weight_pairs) 
                 pooled = cond.pooled.cpu()
                 cond = cond.cpu()
@@ -576,9 +577,13 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             "target_height": target_height, "text_g": text_g, "text_l": text_l
         }
     pooled={}
-    tokenize_with_weights_orig = SD1Tokenizer.tokenize_with_weights
+    if hasattr(comfy.sd1_clip, 'SDTokenizer'):
+        SDTokenizer = comfy.sd1_clip.SDTokenizer
+    else:
+        SDTokenizer = comfy.sd1_clip.SD1Tokenizer
+    tokenize_with_weights_orig = SDTokenizer.tokenize_with_weights
     if parser == "comfy":
-        SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
+        SDTokenizer.tokenize_with_weights = tokenize_with_weights_custom
         clip_model_type_name = type(clip.cond_stage_model).__name__ 
         if with_SDXL and is_sdxl:
             if clip_model_type_name== "SDXLClipModel":
@@ -593,7 +598,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 raise NotImplementedError()
         else:
             out = CLIPTextEncode().encode(clip, text)
-        SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_orig
+        SDTokenizer.tokenize_with_weights = tokenize_with_weights_orig
         return out
     else:
         texts = [text]
@@ -627,9 +632,9 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
 
         tokens = texts
         if parser == "comfy++":
-            SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_custom
+            SDTokenizer.tokenize_with_weights = tokenize_with_weights_custom
             tokens = clip_clone.tokenize(text)
-            SD1Tokenizer.tokenize_with_weights = tokenize_with_weights_orig
+            SDTokenizer.tokenize_with_weights = tokenize_with_weights_orig
         cond = pooled = None
         patch_cond_stage_model()
         try:
@@ -651,6 +656,12 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 for x in range(1,steps):
                     if type(schedules) is not dict:
                         cond=reconstruct_schedules(schedules, x)
+                        if type(cond) is tuple:
+                            conds_list, cond = cond
+                            pooled['conds_list'] = conds_list
+                        cond=cond.cpu()
+                    elif type(schedules) is dict and len(schedules) == 1: # SDXLRefiner
+                        cond = reconstruct_schedules(next(iter(schedules.values())), x)
                         if type(cond) is tuple:
                             conds_list, cond = cond
                             pooled['conds_list'] = conds_list

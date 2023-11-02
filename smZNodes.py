@@ -159,7 +159,7 @@ class ClipTextEncoderCustom:
 
 class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCustomWords, ClipTextEncoderCustom, PopulateVars):
     def __init__(self, wrapped: comfy.sdxl_clip.SDXLClipG, hijack):
-        self.populate_self_variables(wrapped.tokenizer_parent2)
+        self.populate_self_variables(wrapped.tokenizer_parent)
         super().__init__(wrapped, hijack)
         self.id_start = self.wrapped.tokenizer.bos_token_id
         self.id_end = self.wrapped.tokenizer.eos_token_id
@@ -208,7 +208,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
     Custom class that also inherits a tokenizer to have the `_try_get_embedding()` method.
     '''
     def __init__(self, wrapped: comfy.sd1_clip.SD1ClipModel, hijack):
-        self.populate_self_variables(wrapped.tokenizer_parent2) # SD1Tokenizer
+        self.populate_self_variables(wrapped.tokenizer_parent) # SD1Tokenizer
         # self.embedding_identifier_tokenized = wrapped.tokenizer([self.embedding_identifier])["input_ids"][0][1:-1]
         super().__init__(wrapped, hijack)
 
@@ -338,7 +338,7 @@ def get_valid_embeddings(embedding_directory):
 
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):
     from  builtins import any as b_any
-    embedding_directory = self.wrapped.tokenizer_parent2.embedding_directory
+    embedding_directory = self.wrapped.tokenizer_parent.embedding_directory
     embs = get_valid_embeddings(embedding_directory)
     embs_str = '|'.join(embs)
     emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
@@ -350,7 +350,7 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
         embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
         embedding_name = embedding_sname + ext
         if embedding_name:
-            embed, _ = self.wrapped.tokenizer_parent2._try_get_embedding(embedding_name)
+            embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
             if embed is not None:
                 found=True
                 if opts.debug:
@@ -495,18 +495,6 @@ def is_prompt_editing(schedules):
         else:
             if len(v.batch[0][0].schedules) != 1: return True
     return False
-
-def _find_outer_instance(target, target_type):
-    import inspect
-    frame = inspect.currentframe()
-    while frame:
-        if target in frame.f_locals:
-            found = frame.f_locals[target]
-            if isinstance(found, target_type) and found != 1: # steps == 1
-                return found
-        frame = frame.f_back
-    return None
-
 
 def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
@@ -672,9 +660,9 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         out[0][1]['orig_len'] = len(out)
     return (out,)
 
+# ========================================================================
 
 from server import PromptServer
-import json
 def prompt_handler(json_data):
     data=json_data['prompt']
     def tmp():
@@ -845,71 +833,6 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             out = self.inner_model2(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
         return out
 
-class CFGNoisePredictor_(torch.nn.Module):
-    def forward(self, input, sigma, **kwargs):
-        x=input
-        timestep=sigma
-        cond = kwargs['cond']
-        uncond = kwargs['uncond']
-        cond_scale = kwargs['cond_scale']
-        model_options = kwargs.get('model_options', {})
-
-        if not hasattr(self, 'step'):
-            self.step = 0
-
-        if not hasattr(self, 'inner_model_cfg'):
-            self.inner_model_cfg = CFGDenoiser(self.inner_model.inner_model.apply_model)
-            # self.inner_model_cfg = CFGDenoiser(self.forward_orig)
-
-        cc=calc_cond(cond, self.step)
-        uu=calc_cond(uncond, self.step)
-        self.step += 1
-
-        if (any([p[1].get('from_smZ', False) for p in cc]) or 
-            any([p[1].get('from_smZ', False) for p in uu])):
-            if model_options.get('transformer_options',None) is None:
-                model_options['transformer_options'] = {}
-            model_options['transformer_options']['from_smZ'] = True
-
-        kwargs['cond'] = cc
-        kwargs['uncond'] = uu
-        kwargs['model_options'] = model_options
-
-        if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
-            # out = super().apply_model(x, timestep, cc, uu, cond_scale, cond_concat, model_options, seed)
-            out = self.forward_orig(input, sigma, **kwargs)
-        else:
-            # Only supports one cond
-            for ix in range(len(cc)):
-                if cc[ix][1].get('from_smZ', False):
-                    cc = [cc[ix]]
-                    break
-            for ix in range(len(uu)):
-                if uu[ix][1].get('from_smZ', False):
-                    uu = [uu[ix]]
-                    break
-            c=cc[0][1]
-            u=uu[0][1]
-            _cc = cc[0][0]
-            _uu = uu[0][0]
-            x.c_adm = None
-            # def apply_c_adm(x)
-            if c.get("adm_encoded", None) is not None:
-                x.c_adm = torch.cat([c['adm_encoded'], u['adm_encoded']])
-                # SDXL. Need to pad with repeats
-                _cc, _uu = expand(_cc, _uu)
-                _uu, _cc = expand(_uu, _cc)
-            conds_list = c.get('conds_list', [[(0, 1.0)]])
-            image_cond = txt2img_image_conditioning(None, x)
-            apply_model_orig = self.inner_model.apply_model
-            try:
-                self.inner_model.apply_model = lambda x, timestep, cond, uncond, cond_scale, cond_concat=None, model_options={}, seed=None: self.inner_model_cfg(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
-                out = self.forward_orig(input, sigma, **kwargs)
-                # out = self.inner_model_cfg(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
-            finally:
-                self.inner_model.apply_model = apply_model_orig
-        return out
-
 def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
     # if sd_model.model.conditioning_key in {'hybrid', 'concat'}: # Inpainting models
@@ -927,54 +850,6 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     #     # Still takes up a bit of memory, but no encoder call.
     #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
     #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
-
-
-# =======================================================================================
-
-from comfy.samplers import KSampler, KSamplerX0Inpaint
-if hasattr(comfy.samplers, 'CompVisVDenoiser'):
-    from comfy.samplers import CompVisVDenoiser
-if hasattr(comfy, 'k_diffusion') and hasattr(comfy.k_diffusion, 'external'):
-    from comfy.k_diffusion.external import CompVisDenoiser
-from nodes import KSampler as Ksampler_node
-
-def set_model_k(self: KSampler):
-    self.model_denoise = CFGNoisePredictor(self.model, self) # main change
-    if ((getattr(self.model, "parameterization", "") == "v") or
-        (getattr(self.model, "model_type", -1) == comfy.model_base.ModelType.V_PREDICTION)):
-        self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)
-        self.model_wrap.parameterization = getattr(self.model, "parameterization", "v")
-    else:
-        self.model_wrap = CompVisDenoiser(self.model_denoise, quantize=True)
-        self.model_wrap.parameterization = getattr(self.model, "parameterization", "eps")
-    self.model_k = KSamplerX0Inpaint(self.model_wrap)
-
-class SDKSampler(comfy.samplers.KSampler):
-    def __init__(self, *args, **kwargs):
-        super(SDKSampler, self).__init__(*args, **kwargs)
-        if opts.use_CFGDenoiser:
-            set_model_k(self)
-
-# Custom KSampler using CFGDenoiser. Unused.
-class smz_SDKSampler(Ksampler_node):
-    @classmethod
-    def INPUT_TYPES(s):
-        it = super(smz_SDKSampler, s).INPUT_TYPES()
-        if not it.get('hidden'):
-            it['hidden'] = {}
-        it['hidden']['use_CFGDenoiser'] = ([False, True],{"default": True})
-        return it
-    def sample(self, use_CFGDenoiser=True, *args, **kwargs):
-        opts.use_CFGDenoiser = use_CFGDenoiser
-        comfy.samplers.KSampler_orig = comfy.samplers.KSampler
-        ret = None
-        try:
-            comfy.samplers.KSampler = SDKSampler
-            ret = super(smz_SDKSampler, self).sample(*args, **kwargs)
-            comfy.samplers.KSampler = comfy.samplers.KSampler_orig
-        finally:
-            comfy.samplers.KSampler = comfy.samplers.KSampler_orig
-        return ret
 
 # =======================================================================================
 

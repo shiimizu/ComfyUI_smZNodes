@@ -72,7 +72,7 @@ setup_web_extension()
 # ==============
 
 # add_sample_dpmpp_2m_alt, inject_code, opts as smZ_opts
-from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor, CFGNoisePredictor_
+from .smZNodes import add_sample_dpmpp_2m_alt, inject_code, CFGNoisePredictor
 
 add_sample_dpmpp_2m_alt()
 
@@ -154,17 +154,10 @@ else:
             else:
                 return _max_denoise(self, model_wrap, sigmas)
 
-    def wrap_model(model):
-        model_wrap = _wrap_model(model)
-        model_wrap.forward_orig = model_wrap.forward
-        model_wrap.forward = partial(CFGNoisePredictor_.forward, model_wrap)
-        return model_wrap
-
     comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
     comfy.samplers.KSampler.sample = KSampler_sample
     comfy.samplers.sample = sample
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
-# comfy.samplers.wrap_model = wrap_model
 
 if hasattr(comfy.model_management, 'unet_dtype'):
     comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype

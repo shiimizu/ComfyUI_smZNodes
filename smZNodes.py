@@ -5,7 +5,7 @@ from typing import List, Tuple
 from functools import partial
 from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
-from .modules.sd_samplers_kdiffusion import CFGDenoiser
+from .modules.sd_samplers_cfg_denoiser import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from .modules.textual_inversion.textual_inversion import Embedding

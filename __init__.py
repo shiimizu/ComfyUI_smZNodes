@@ -103,9 +103,7 @@ if not hasattr(comfy.samplers, 'Sampler'):
 else:
     _KSampler_sample = comfy.samplers.KSampler.sample
     _Sampler = comfy.samplers.Sampler
-    _DDIM = comfy.samplers.DDIM
-    _UNIPC = comfy.samplers.UNIPC
-    _UNIPCBH2 = comfy.samplers.UNIPCBH2
+    _max_denoise = comfy.samplers.Sampler.max_denoise
     _sample = comfy.samplers.sample
     _wrap_model = comfy.samplers.wrap_model
 
@@ -141,22 +139,20 @@ else:
 
     class Sampler(_Sampler):
         def max_denoise(self, model_wrap, sigmas):
-            model = model_wrap.inner_model.inner_model
+            model = model_wrap.inner_model
+            if hasattr(model, 'inner_model'):
+                model = model.inner_model
             if getattr(model, 'start_step', None) is not None:
                 model_wrap.inner_model.step = int(model.start_step)
                 del model.start_step
             if model.from_smZ:
                 from .modules.shared import opts
                 if opts.sgm_noise_multiplier:
-                    return super().max_denoise(model_wrap, sigmas)
+                    return _max_denoise(self, model_wrap, sigmas)
                 else:
                     return False
             else:
-                return super().max_denoise(model_wrap, sigmas)
-
-    class DDIM(Sampler, _DDIM): ...
-    class UNIPC(Sampler, _UNIPC): ...
-    class UNIPCBH2(Sampler, _UNIPCBH2): ...
+                return _max_denoise(self, model_wrap, sigmas)
 
     def wrap_model(model):
         model_wrap = _wrap_model(model)
@@ -164,10 +160,7 @@ else:
         model_wrap.forward = partial(CFGNoisePredictor_.forward, model_wrap)
         return model_wrap
 
-    comfy.samplers.Sampler = Sampler
-    comfy.samplers.DDIM = DDIM
-    comfy.samplers.UNIPC = UNIPC
-    comfy.samplers.UNIPCBH2 = UNIPCBH2
+    comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
     comfy.samplers.KSampler.sample = KSampler_sample
     comfy.samplers.sample = sample
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor

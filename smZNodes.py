@@ -1,29 +1,21 @@
 from __future__ import annotations
 import comfy
 import torch
-from comfy.sd import CLIP
 from typing import List, Tuple
-from types import MethodType
 from functools import partial
 from .modules import prompt_parser, shared, devices
 from .modules.shared import opts
 from .modules.sd_samplers_kdiffusion import CFGDenoiser
-from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords, FrozenCLIPEmbedderWithCustomWordsBase
+from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from .modules.textual_inversion.textual_inversion import Embedding
 import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
 from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
-from comfy.sdxl_clip import SDXLClipGTokenizer
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
-from comfy import model_base, model_management
-from comfy.samplers import KSampler, CompVisVDenoiser, KSamplerX0Inpaint
-from comfy.k_diffusion.external import CompVisDenoiser
-from types import MethodType
-import comfy_extras
-import nodes
+from comfy import model_management
 import inspect
 from textwrap import dedent, indent
 import functools
@@ -939,10 +931,17 @@ def txt2img_image_conditioning(sd_model, x, width=None, height=None):
 
 # =======================================================================================
 
+from comfy.samplers import KSampler, KSamplerX0Inpaint
+if hasattr(comfy.samplers, 'CompVisVDenoiser'):
+    from comfy.samplers import CompVisVDenoiser
+if hasattr(comfy, 'k_diffusion') and hasattr(comfy.k_diffusion, 'external'):
+    from comfy.k_diffusion.external import CompVisDenoiser
+from nodes import KSampler as Ksampler_node
+
 def set_model_k(self: KSampler):
     self.model_denoise = CFGNoisePredictor(self.model, self) # main change
     if ((getattr(self.model, "parameterization", "") == "v") or
-        (getattr(self.model, "model_type", -1) == model_base.ModelType.V_PREDICTION)):
+        (getattr(self.model, "model_type", -1) == comfy.model_base.ModelType.V_PREDICTION)):
         self.model_wrap = CompVisVDenoiser(self.model_denoise, quantize=True)
         self.model_wrap.parameterization = getattr(self.model, "parameterization", "v")
     else:
@@ -957,7 +956,7 @@ class SDKSampler(comfy.samplers.KSampler):
             set_model_k(self)
 
 # Custom KSampler using CFGDenoiser. Unused.
-class smz_SDKSampler(nodes.KSampler):
+class smz_SDKSampler(Ksampler_node):
     @classmethod
     def INPUT_TYPES(s):
         it = super(smz_SDKSampler, s).INPUT_TYPES()

@@ -122,7 +122,7 @@ class smZ_Settings:
                     "RNG": (["cpu", "gpu", "nv"],{"default": opts.randn_source}),
                     
                     "ㅤ"*2: ("STRING", {"multiline": False, "default": "Compute Settings"}),
-                    "info_disable_nan_check": ("STRING", {"multiline": True, "default": "Disable NaN check in produced images/latent spaces"}),
+                    "info_disable_nan_check": ("STRING", {"multiline": True, "default": "Disable NaN check in produced images/latent spaces. Only for CFGDenoiser."}),
                     "disable_nan_check": (BOOLEAN, {"default": opts.disable_nan_check}),
 
                     "ㅤ"*3: ("STRING", {"multiline": False, "default": "Sampler parameters"}),
@@ -132,11 +132,11 @@ class smZ_Settings:
                     "upcast_sampling": (BOOLEAN, {"default": opts.upcast_sampling}),
 
                     "ㅤ"*3: ("STRING", {"multiline": False, "default": "Optimizations"}),
-                    "info_NGMS": ("STRING", {"multiline": True, "default": "Negative Guidance minimum sigma\nskip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177"}),
+                    "info_NGMS": ("STRING", {"multiline": True, "default": "Negative Guidance minimum sigma\nskip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster. Only for CFGDenoiser.\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177"}),
                     "NGMS": ("FLOAT", {"default": opts.s_min_uncond, "min": 0.0, "max": 4.0, "step": 0.01}),
-                    "info_pad_cond_uncond": ("STRING", {"multiline": True, "default": "Pad prompt/negative prompt to be same length\nimproves performance when prompt and negative prompt have different lengths; changes seeds"}),
+                    "info_pad_cond_uncond": ("STRING", {"multiline": True, "default": "Pad prompt/negative prompt to be same length\nimproves performance when prompt and negative prompt have different lengths; changes seeds. Only for CFGDenoiser."}),
                     "pad_cond_uncond": (BOOLEAN, {"default": opts.pad_cond_uncond}),
-                    "info_batch_cond_uncond": ("STRING", {"multiline": True, "default": "Batch cond/uncond\ndo both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed – on by default for SDXL"}),
+                    "info_batch_cond_uncond": ("STRING", {"multiline": True, "default": "Batch cond/uncond\ndo both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed – enabled on SDXL models. Only for CFGDenoiser."}),
                     "batch_cond_uncond": (BOOLEAN, {"default": opts.batch_cond_uncond}),
 
                     "ㅤ"*4: ("STRING", {"multiline": False, "default": "Compatibility"}),

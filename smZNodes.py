@@ -58,27 +58,44 @@ should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_
 class ClipTextEncoderCustom:
 
     def _forward(self: comfy.sd1_clip.SD1ClipModel, tokens):
+        def set_dtype_compat(dtype):
+            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+            _p = should_use_fp16_signature.parameters
+            # newer versions of ComfyUI upcasts the transformer embeddings, which is technically correct
+            # when it's a newer version, we want to downcast it to torch.float16, so set newv=True
+            newv = False
+            # newv = 'device' in _p and 'prioritize_performance' in _p # comment this to have default comfy behaviour
+            if dtype_num(dtype) >= 32:
+                newv = False
+            if newv:
+                dtype = devices.dtype if dtype != devices.dtype else dtype
+            token_embedding_dtype = position_embedding_dtype = torch.float32
+            if newv:
+                # self.transformer.text_model.embeddings.position_embedding.to(dtype)
+                # self.transformer.text_model.embeddings.token_embedding.to(dtype)
+                inner_model = getattr(self.transformer, self.inner_name, None)
+                if inner_model is not None and hasattr(inner_model, "embeddings"):
+                    inner_model.embeddings.to(dtype)
+                else:
+                    self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype))
+        def reset_dtype_compat(newv):
+            if newv:
+                # self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
+                # self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
+                inner_model = getattr(self.transformer, self.inner_name, None)
+                if inner_model is not None and hasattr(inner_model, "embeddings"):
+                    inner_model.embeddings.to(torch.float32)
+                else:
+                    self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(torch.float32))
+        # set_dtype_compat()
+
         backup_embeds = self.transformer.get_input_embeddings()
         device = backup_embeds.weight.device
         tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
         tokens = torch.LongTensor(tokens).to(device)
 
         # dtype=backup_embeds.weight.dtype
-        dtype=self.transformer.text_model.final_layer_norm.weight.dtype
-        dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
-        _p = should_use_fp16_signature.parameters
-        # newer versions of ComfyUI upcasts the transformer embeddings, which is technically correct
-        # when it's a newer version, we want to downcast it to torch.float16, so set newv=True
-        newv = False
-        # newv = 'device' in _p and 'prioritize_performance' in _p # comment this to have default comfy behaviour
-        if dtype_num(dtype) >= 32:
-            newv = False
-        if newv:
-            dtype = devices.dtype if dtype != devices.dtype else dtype
-        token_embedding_dtype = position_embedding_dtype = torch.float32
-        if newv:
-            self.transformer.text_model.embeddings.position_embedding.to(dtype)
-            self.transformer.text_model.embeddings.token_embedding.to(dtype)
+        dtype = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm.weight.dtype
 
         if dtype != torch.float32:
             precision_scope = torch.autocast
@@ -86,7 +103,17 @@ class ClipTextEncoderCustom:
             precision_scope = lambda a, b=None: contextlib.nullcontext(a)
 
         with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
-            outputs = self.transformer(input_ids=tokens, output_hidden_states=self.layer=="hidden")
+            attention_mask = None
+            if self.enable_attention_masks:
+                attention_mask = torch.zeros_like(tokens)
+                max_token = self.transformer.get_input_embeddings().weight.shape[0] - 1
+                for x in range(attention_mask.shape[0]):
+                    for y in range(attention_mask.shape[1]):
+                        attention_mask[x, y] = 1
+                        if tokens[x, y] == max_token:
+                            break
+
+            outputs = self.transformer(input_ids=tokens, attention_mask=attention_mask, output_hidden_states=self.layer=="hidden")
             self.transformer.set_input_embeddings(backup_embeds)
 
             if self.layer == "last":
@@ -96,22 +123,23 @@ class ClipTextEncoderCustom:
             else:
                 z = outputs.hidden_states[self.layer_idx]
                 if self.layer_norm_hidden_state:
-                    # new version of comfyui
-                    # z = self.transformer.text_model.final_layer_norm(z)
                     try:
-                        z = self.transformer.text_model.final_layer_norm(z.to(device=device, dtype=dtype)) # (z)
+                        z = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm(z.to(device=device, dtype=dtype)) # (z)
                     except Exception as err:
                         if opts.debug:
                             print("[smZNodes] ERROR final_layer_norm:", err)
-                        z = self.transformer.text_model.final_layer_norm(z)
+                        z = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm(z)
 
-            pooled_output = outputs.pooler_output
-            if self.text_projection is not None:
+
+            if hasattr(outputs, "pooler_output"):
+                pooled_output = outputs.pooler_output.float()
+            else:
+                pooled_output = None
+
+            if self.text_projection is not None and pooled_output is not None:
                 pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
-        if newv:
-            self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
-            self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
-        return z.float(), pooled_output.float()
+            # reset_dtype_compat(True)
+        return z.float(), pooled_output
 
     def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
         tokens_orig = tokens
@@ -231,7 +259,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
 
 emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?"
 
-def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=False):
+def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     '''
     Takes a prompt and converts it to a list of (token, weight, word id) elements.
     Tokens can both be integer tokens and pre computed CLIP tensors.
@@ -283,11 +311,13 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
             if (fragment:=word[last_end:]):
                 leftovers.append(fragment)
                 word_new = ''.join(leftovers)
-                tokens.append([(t, weight) for t in self.tokenizer(word_new)["input_ids"][1:-1]])
+                tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][self.tokens_start:-1]])
 
     #reshape token array to CLIP input size
     batched_tokens = []
-    batch = [(self.start_token, 1.0, 0)]
+    batch = []
+    if self.start_token is not None:
+        batch.append((self.start_token, 1.0, 0))
     batched_tokens.append(batch)
     for i, t_group in enumerate(tokens):
         #determine if we're going to try and keep the tokens in a single batch
@@ -304,16 +334,21 @@ def tokenize_with_weights_custom(self:SD1Tokenizer, text:str, return_word_ids=Fa
                 #add end token and pad
                 else:
                     batch.append((self.end_token, 1.0, 0))
-                    batch.extend([(pad_token, 1.0, 0)] * (remaining_length))
+                    if self.pad_to_max_length:
+                        batch.extend([(pad_token, 1.0, 0)] * (remaining_length))
                 #start new batch
-                batch = [(self.start_token, 1.0, 0)]
+                batch = []
+                if self.start_token is not None:
+                    batch.append((self.start_token, 1.0, 0))
                 batched_tokens.append(batch)
             else:
                 batch.extend([(t,w,i+1) for t,w in t_group])
                 t_group = []
 
     #fill last batch
-    batch.extend([(self.end_token, 1.0, 0)] + [(pad_token, 1.0, 0)] * (self.max_length - len(batch) - 1))
+    batch.append((self.end_token, 1.0, 0))
+    if self.pad_to_max_length:
+        batch.extend([(pad_token, 1.0, 0)] * (self.max_length - len(batch)))
 
     if not return_word_ids:
         batched_tokens = [[(t, w) for t, w,_ in x] for x in batched_tokens]

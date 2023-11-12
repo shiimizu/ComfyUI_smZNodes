@@ -369,6 +369,7 @@ def get_valid_embeddings(embedding_directory):
                 n = os.path.basename(name)
                 for ext in exts: n=n.removesuffix(ext)
                 embs.append(re.escape(n))
+    embs.sort(key=len, reverse=True)
     return embs
 
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):

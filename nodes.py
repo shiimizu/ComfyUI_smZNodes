@@ -126,12 +126,14 @@ class smZ_Settings:
                     "disable_nan_check": (BOOLEAN, {"default": opts.disable_nan_check}),
 
                     "ㅤ"*3: ("STRING", {"multiline": False, "default": "Sampler parameters"}),
+                    "info_eta_noise_seed_delta": ("STRING", {"multiline": True, "default": "Eta noise seed delta\ndoes not improve anything, just produces different results for ancestral samplers - only useful for reproducing images"}),
+                    "ENSD": ("INT", {"default": opts.eta_noise_seed_delta, "min": 0, "max": 0xffffffffffffffff, "step": 1}),
                     "info_sgm_noise_multiplier": ("STRING", {"multiline": True, "default": "SGM noise multiplier\nmatch initial noise to official SDXL implementation - only useful for reproducing images\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/12818"}),
                     "sgm_noise_multiplier": (BOOLEAN, {"default": opts.sgm_noise_multiplier}),
                     "info_upcast_sampling": ("STRING", {"multiline": True, "default": "upcast sampling.\nNo effect with --force-fp32. Usually produces similar results to --force-fp32 with better performance while using less memory."}),
                     "upcast_sampling": (BOOLEAN, {"default": opts.upcast_sampling}),
 
-                    "ㅤ"*3: ("STRING", {"multiline": False, "default": "Optimizations"}),
+                    "ㅤ"*4: ("STRING", {"multiline": False, "default": "Optimizations"}),
                     "info_NGMS": ("STRING", {"multiline": True, "default": "Negative Guidance minimum sigma\nskip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster. Only for CFGDenoiser.\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177"}),
                     "NGMS": ("FLOAT", {"default": opts.s_min_uncond, "min": 0.0, "max": 4.0, "step": 0.01}),
                     "info_pad_cond_uncond": ("STRING", {"multiline": True, "default": "Pad prompt/negative prompt to be same length\nimproves performance when prompt and negative prompt have different lengths; changes seeds. Only for CFGDenoiser."}),
@@ -139,11 +141,11 @@ class smZ_Settings:
                     "info_batch_cond_uncond": ("STRING", {"multiline": True, "default": "Batch cond/uncond\ndo both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed – enabled on SDXL models. Only for CFGDenoiser."}),
                     "batch_cond_uncond": (BOOLEAN, {"default": opts.batch_cond_uncond}),
 
-                    "ㅤ"*4: ("STRING", {"multiline": False, "default": "Compatibility"}),
+                    "ㅤ"*5: ("STRING", {"multiline": False, "default": "Compatibility"}),
                     "info_use_prev_scheduling": ("STRING", {"multiline": True, "default": "Previous prompt editing timelines\nFor [red:green:N]; previous: If N < 1, it's a fraction of steps (and hires fix uses range from 0 to 1), if N >= 1, it's an absolute number of steps; new: If N has a decimal point in it, it's a fraction of steps (and hires fix uses range from 1 to 2), othewrwise it's an absolute number of steps"}),
                     "Use previous prompt editing timelines": (BOOLEAN, {"default": opts.use_old_scheduling}),
-
-                    "ㅤ"*5: ("STRING", {"multiline": False, "default": "Experimental"}),
+                    
+                    "ㅤ"*6: ("STRING", {"multiline": False, "default": "Experimental"}),
                     "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to get identical images regardless of the prompt."}),
                     "Use CFGDenoiser": (BOOLEAN, {"default": opts.use_CFGDenoiser}),
                     "info_debug": ("STRING", {"multiline": True, "default": "Debugging messages in the console."}),
@@ -157,7 +159,7 @@ class smZ_Settings:
 
     def run(self, *args, **kwargs):
         from .modules.shared import opts
-        device = comfy.model_management.text_encoder_device()
+        device = comfy.model_management.get_torch_device()
 
         _any = kwargs.pop('any', None)
         kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
@@ -172,18 +174,12 @@ class smZ_Settings:
         for k,v in kwargs.items():
             setattr(opts, k, v)
 
+        if not hasattr(comfy.sample, 'prepare_noise_orig'):
+            comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
         if opts.randn_source == 'cpu':
-            if hasattr(comfy.sample, 'prepare_noise_orig'):
-                comfy.sample.prepare_noise = comfy.sample.prepare_noise_orig
-        else:
-            if not hasattr(comfy.sample, 'prepare_noise_orig'):
-                comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
-            import functools
-            if opts.randn_source == 'gpu':
-                if device == torch.device("cpu") or device == "cpu":
-                    device = comfy.model_management.get_torch_device()
-            _prepare_noise = functools.partial(prepare_noise, device=device)
-            comfy.sample.prepare_noise = _prepare_noise
+            device = torch.device("cpu")
+        _prepare_noise = partial(prepare_noise, device=device)
+        comfy.sample.prepare_noise = _prepare_noise
 
         return (_any,)
 

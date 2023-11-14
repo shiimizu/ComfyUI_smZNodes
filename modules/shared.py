@@ -62,6 +62,7 @@ opts.pad_with_repeats = True
 opts.randn_source = "cpu"
 opts.lora_functional = False
 opts.use_old_scheduling = False
+opts.eta_noise_seed_delta = 0
 
 opts.use_CFGDenoiser = False
 opts.sgm_noise_multiplier = True

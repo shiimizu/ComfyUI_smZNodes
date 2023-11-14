@@ -539,10 +539,13 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     from .modules.shared import opts
     from comfy.sample import np
-    generator = torch.Generator(device).manual_seed(seed)
+    if opts.eta_noise_seed_delta != 0:
+        seed = min(seed + opts.eta_noise_seed_delta, 0xffffffffffffffff)
     if opts.randn_source == 'nv':
         from .modules import rng_philox
         rng = rng_philox.Generator(seed)
+    else:
+        generator = torch.Generator(device).manual_seed(seed)
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':

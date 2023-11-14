@@ -545,7 +545,12 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         from .modules import rng_philox
         rng = rng_philox.Generator(seed)
     else:
-        generator = torch.Generator(device).manual_seed(seed)
+        if device == "cpu":
+            generator = torch.manual_seed(seed)
+        elif device == "cuda":
+            generator = torch.cuda.manual_seed(seed)
+        else:
+            generator = torch.Generator(device).manual_seed(seed)
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':

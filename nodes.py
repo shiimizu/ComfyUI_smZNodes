@@ -179,7 +179,7 @@ class smZ_Settings:
             comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
         if opts.randn_source == 'cpu':
             device = torch.device("cpu")
-        _prepare_noise = partial(prepare_noise, device=device)
+        _prepare_noise = partial(prepare_noise, device=device.type)
         comfy.sample.prepare_noise = _prepare_noise
 
         return (_any,)

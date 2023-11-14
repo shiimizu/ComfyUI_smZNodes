@@ -169,6 +169,7 @@ class smZ_Settings:
         kwargs['use_CFGDenoiser'] = kwargs.pop("Use CFGDenoiser")
         kwargs['debug'] = kwargs.pop('Debug')
         kwargs['randn_source'] = kwargs.pop('RNG')
+        kwargs['eta_noise_seed_delta'] = kwargs.pop('ENSD')
         
         [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
         for k,v in kwargs.items():

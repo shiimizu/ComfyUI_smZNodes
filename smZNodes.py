@@ -100,9 +100,9 @@ class ClipTextEncoderCustom:
         if dtype != torch.float32:
             precision_scope = torch.autocast
         else:
-            precision_scope = lambda a, b=None: contextlib.nullcontext(a)
+            precision_scope = lambda a, dtype=None: contextlib.nullcontext(a)
 
-        with precision_scope(model_management.get_autocast_device(device)): # , torch.float32):
+        with precision_scope(model_management.get_autocast_device(device), dtype=dtype): # , torch.float32):
             attention_mask = None
             if self.enable_attention_masks:
                 attention_mask = torch.zeros_like(tokens)
@@ -671,31 +671,30 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": pooled.conds_list, **sdxl_params}
         out = [[cond, pooled]]
         if is_prompt_editing(schedules):
-            with devices.autocast():
-                for x in range(1,steps):
-                    if type(schedules) is not dict:
-                        cond=reconstruct_schedules(schedules, x)
-                        if type(cond) is tuple:
-                            conds_list, cond = cond
-                            pooled['conds_list'] = conds_list
-                        cond=cond.cpu()
-                    elif type(schedules) is dict and len(schedules) == 1: # SDXLRefiner
-                        cond = reconstruct_schedules(next(iter(schedules.values())), x)
-                        if type(cond) is tuple:
-                            conds_list, cond = cond
-                            pooled['conds_list'] = conds_list
-                        cond=cond.cpu()
-                    elif type(schedules) is dict:
-                        g_out = reconstruct_schedules(schedules['g'], x)
-                        if type(g_out) is tuple: _, g_out = g_out
-                        l_out = reconstruct_schedules(schedules['l'], x)
-                        if type(l_out) is tuple: _, l_out = l_out
-                        g_out, l_out = expand(g_out, l_out)
-                        l_out, g_out = expand(l_out, g_out)
-                        cond = torch.cat([l_out, g_out], dim=-1).cpu()
-                    else:
-                        raise NotImplementedError
-                    out = out + [[cond, pooled]]
+            for x in range(1,steps):
+                if type(schedules) is not dict:
+                    cond=reconstruct_schedules(schedules, x)
+                    if type(cond) is tuple:
+                        conds_list, cond = cond
+                        pooled['conds_list'] = conds_list
+                    cond=cond.cpu()
+                elif type(schedules) is dict and len(schedules) == 1: # SDXLRefiner
+                    cond = reconstruct_schedules(next(iter(schedules.values())), x)
+                    if type(cond) is tuple:
+                        conds_list, cond = cond
+                        pooled['conds_list'] = conds_list
+                    cond=cond.cpu()
+                elif type(schedules) is dict:
+                    g_out = reconstruct_schedules(schedules['g'], x)
+                    if type(g_out) is tuple: _, g_out = g_out
+                    l_out = reconstruct_schedules(schedules['l'], x)
+                    if type(l_out) is tuple: _, l_out = l_out
+                    g_out, l_out = expand(g_out, l_out)
+                    l_out, g_out = expand(l_out, g_out)
+                    cond = torch.cat([l_out, g_out], dim=-1).cpu()
+                else:
+                    raise NotImplementedError
+                out = out + [[cond, pooled]]
         out[0][1]['orig_len'] = len(out)
     return (out,)
 

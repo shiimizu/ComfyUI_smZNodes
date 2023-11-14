@@ -67,7 +67,7 @@ def ApplyOptimizationsContext3(func):
             return func(*args, **kwargs)
     return wrapper
 
-precision_scope_null = lambda a, b=None: contextlib.nullcontext(a)
+precision_scope_null = lambda a, dtype=None: contextlib.nullcontext(a)
 
 # def apply_model(orig_func, self, x_noisy, t, c_concat=None, c_crossattn=None, c_adm=None, control=None, transformer_options={}, *args, **kwargs):
 def apply_model(orig_func, self, *args, **kwargs):
@@ -90,7 +90,7 @@ def apply_model(orig_func, self, *args, **kwargs):
     else:
         precision_scope = precision_scope_null
 
-    with precision_scope(comfy.model_management.get_autocast_device(x_noisy.device)): # , torch.float32):
+    with precision_scope(comfy.model_management.get_autocast_device(x_noisy.device), dtype=x_noisy.dtype): # , torch.float32):
     # with devices.autocast():
         out = orig_func(self, *args, **kwargs).float()
     return out

@@ -532,6 +532,46 @@ def is_prompt_editing(schedules):
             if len(v.batch[0][0].schedules) != 1: return True
     return False
 
+# ===================================================================
+# RNG
+from .modules import rng_philox
+def randn_without_seed(x, generator=None, randn_source="cpu"):
+    """Generate a tensor with random numbers from a normal distribution using the previously initialized genrator.
+
+    Use either randn() or manual_seed() to initialize the generator."""
+    if randn_source == "nv":
+        return torch.asarray((generator or nv_rng).randn(x.size()), device=x.device)
+    else:
+        if generator is not None and generator.device.type == "cpu":
+            return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=devices.cpu, generator=generator).to(device=x.device)
+        else:
+            return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=x.device, generator=generator)
+
+class TorchHijack:
+    """This is here to replace torch.randn_like of k-diffusion.
+
+    k-diffusion has random_sampler argument for most samplers, but not for all, so
+    this is needed to properly replace every use of torch.randn_like.
+
+    We need to replace to make images generated in batches to be same as images generated individually."""
+
+    def __init__(self, generator, randn_source):
+        # self.rng = p.rng
+        self.generator = generator
+        self.randn_source = randn_source
+
+    def __getattr__(self, item):
+        if item == 'randn_like':
+            return self.randn_like
+
+        if hasattr(torch, item):
+            return getattr(torch, item)
+
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{item}'")
+
+    def randn_like(self, x):
+        return randn_without_seed(x, generator=self.generator, randn_source=self.randn_source)
+
 def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     creates random noise given a latent image and a seed.
@@ -540,36 +580,41 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     from .modules.shared import opts
     from comfy.sample import np
     if opts.eta_noise_seed_delta != 0:
-        seed = min(seed + opts.eta_noise_seed_delta, 0xffffffffffffffff)
-    if device == "cpu" or opts.randn_source == 'nv':
-        generator = torch.manual_seed(seed)
-    elif device == "cuda":
-        generator = torch.cuda.manual_seed(seed)
-    else:
-        generator = torch.Generator(device).manual_seed(seed)
+        seed = min(int(seed + opts.eta_noise_seed_delta), int(0xffffffffffffffff))
+    _generator = torch.Generator(device=device)
+    generator = _generator.manual_seed(seed)
+    
     if opts.randn_source == 'nv':
-        from .modules import rng_philox
-        rng = rng_philox.Generator(seed)
+        global nv_rng
+        rng = nv_rng = rng_philox.Generator(seed)
+        generator = None
+
+    # hijack randn_like
+    import comfy.k_diffusion.sampling
+    comfy.k_diffusion.sampling.torch = TorchHijack(generator, opts.randn_source)
+
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':
-            return torch.asarray(rng.randn(shape), device=device)
+            return torch.asarray(rng.randn(shape), device=devices.cpu)
         else:
-            return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)
+            return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
     
     unique_inds, inverse = np.unique(noise_inds, return_inverse=True)
     noises = []
     for i in range(unique_inds[-1]+1):
         shape = [1] + list(latent_image.size())[1:]
         if opts.randn_source == 'nv':
-            noise = torch.asarray(rng.randn(shape), device=device)
+            noise = torch.asarray(rng.randn(shape), device=devices.cpu)
         else:
-            noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device=device)
+            noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
         if i in unique_inds:
             noises.append(noise)
     noises = [noises[i] for i in inverse]
     noises = torch.cat(noises, axis=0)
     return noises
+
+# ===========================================================
 
 def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                multi_conditioning, use_old_emphasis_implementation, with_SDXL,

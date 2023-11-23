@@ -27,6 +27,10 @@ function toggleWidget(node, widget, show = false, suffix = "") {
 
     const height = show ? Math.max(node.computeSize()[1], origSize[1]) : node.size[1];
     node.setSize([node.size[0], height]);
+    if (show)
+        delete widget.computedHeight;
+    else
+        widget.computedHeight = 0;
 }
 
 function widgetLogic(node, widget) {
@@ -46,8 +50,7 @@ function widgetLogic(node, widget) {
             // Prevents resizing on init/webpage reload
             if(widget.init === false) {
                 // Resize when set to false
-                // node.setSize([node.size[0], Math.min(102, node.size[1]/3.0)])
-                node.setSize([node.size[0], 102])
+                node.setSize([node.size[0], Math.max(102, node.size[1]/1.5)])
             }
         } else {
             // When enabled, set init to false

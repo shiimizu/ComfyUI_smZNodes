@@ -181,24 +181,6 @@ class smZ_Settings:
             device = torch.device("cpu")
         _prepare_noise = partial(prepare_noise, device=device.type)
         comfy.sample.prepare_noise = _prepare_noise
-
-        import nodes
-        if not hasattr(nodes, 'common_ksampler_orig'):
-            nodes.common_ksampler_orig = nodes.common_ksampler
-        def common_ksampler(*args, **kwargs):
-            try:
-                sampler_name = kwargs['sampler_name'] if 'sampler_name' in kwargs else args[4]
-                uses_ensd = ['ancestral', 'dpm_fast', 'dpm_adaptive']
-                # disable ENSD if it's not a valid sampler
-                if not any([x in sampler_name for x in uses_ensd]):
-                    opts.eta_noise_seed_delta = abs(opts.eta_noise_seed_delta) * -1
-                else:
-                    opts.eta_noise_seed_delta = abs(opts.eta_noise_seed_delta)
-            except:
-                print("[smZNodes] Error getting sampler_name for ENSD")
-            return nodes.common_ksampler_orig(*args, **kwargs)
-        nodes.common_ksampler = common_ksampler
-
         return (_any,)
 
 # A dictionary that contains all nodes you want to export with their names

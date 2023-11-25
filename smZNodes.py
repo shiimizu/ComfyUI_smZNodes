@@ -540,7 +540,7 @@ def randn_without_seed(x, generator=None, randn_source="cpu"):
 
     Use either randn() or manual_seed() to initialize the generator."""
     if randn_source == "nv":
-        return torch.asarray((generator or nv_rng).randn(x.size()), device=x.device)
+        return torch.asarray(generator.randn(x.size()), device=x.device)
     else:
         if generator is not None and generator.device.type == "cpu":
             return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=devices.cpu, generator=generator).to(device=x.device)
@@ -579,24 +579,29 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     from .modules.shared import opts
     from comfy.sample import np
-    if opts.eta_noise_seed_delta != 0:
+    def get_generator(seed):
+        nonlocal device
+        nonlocal opts
+        _generator = torch.Generator(device=device)
+        generator = _generator.manual_seed(seed)
+        if opts.randn_source == 'nv':
+            generator = rng_philox.Generator(seed)
+        return generator
+    generator = generator_eta = get_generator(seed)
+
+    if opts.eta_noise_seed_delta > 0:
         seed = min(int(seed + opts.eta_noise_seed_delta), int(0xffffffffffffffff))
-    _generator = torch.Generator(device=device)
-    generator = _generator.manual_seed(seed)
-    
-    if opts.randn_source == 'nv':
-        global nv_rng
-        rng = nv_rng = rng_philox.Generator(seed)
-        generator = None
+        generator_eta = get_generator(seed)
+
 
     # hijack randn_like
     import comfy.k_diffusion.sampling
-    comfy.k_diffusion.sampling.torch = TorchHijack(generator, opts.randn_source)
+    comfy.k_diffusion.sampling.torch = TorchHijack(generator_eta, opts.randn_source)
 
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':
-            return torch.asarray(rng.randn(shape), device=devices.cpu)
+            return torch.asarray(generator.randn(shape), device=devices.cpu)
         else:
             return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
     

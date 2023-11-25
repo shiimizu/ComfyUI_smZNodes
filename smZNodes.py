@@ -772,7 +772,9 @@ def prompt_handler(json_data):
         def get_steps(graph, node_id):
             node = graph.get(str(node_id), {})
             steps_input_value = node.get("inputs", {}).get("steps", None)
-            
+            if steps_input_value is None:
+                steps_input_value = node.get("inputs", {}).get("sigmas", None)
+
             while(True):
                 # Base case: it's a direct value
                 if isinstance(steps_input_value, (int, float, str)):
@@ -782,9 +784,11 @@ def prompt_handler(json_data):
                 elif isinstance(steps_input_value, list):
                     ref_node_id, ref_input_index = steps_input_value
                     ref_node = graph.get(str(ref_node_id), {})
-                    keys = list(ref_node.get("inputs", {}).keys())
-                    ref_input_key = keys[ref_input_index % len(keys)]
-                    steps_input_value = ref_node.get("inputs", {}).get(ref_input_key)
+                    steps_input_value = ref_node.get("inputs", {}).get("steps", None)
+                    if steps_input_value is None:
+                        keys = list(ref_node.get("inputs", {}).keys())
+                        ref_input_key = keys[ref_input_index % len(keys)]
+                        steps_input_value = ref_node.get("inputs", {}).get(ref_input_key)
                 else:
                     return None
 

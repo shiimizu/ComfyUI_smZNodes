@@ -610,7 +610,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     for i in range(unique_inds[-1]+1):
         shape = [1] + list(latent_image.size())[1:]
         if opts.randn_source == 'nv':
-            noise = torch.asarray(rng.randn(shape), device=devices.cpu)
+            noise = torch.asarray(generator.randn(shape), device=devices.cpu)
         else:
             noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
         if i in unique_inds:

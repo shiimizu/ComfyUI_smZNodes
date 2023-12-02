@@ -69,8 +69,6 @@ class ClipTextEncoderCustom:
                 newv = False
             if newv:
                 dtype = devices.dtype if dtype != devices.dtype else dtype
-            token_embedding_dtype = position_embedding_dtype = torch.float32
-            if newv:
                 # self.transformer.text_model.embeddings.position_embedding.to(dtype)
                 # self.transformer.text_model.embeddings.token_embedding.to(dtype)
                 inner_model = getattr(self.transformer, self.inner_name, None)
@@ -80,6 +78,7 @@ class ClipTextEncoderCustom:
                     self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype))
         def reset_dtype_compat(newv):
             if newv:
+                # token_embedding_dtype = position_embedding_dtype = torch.float32
                 # self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
                 # self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
                 inner_model = getattr(self.transformer, self.inner_name, None)
@@ -87,7 +86,7 @@ class ClipTextEncoderCustom:
                     inner_model.embeddings.to(torch.float32)
                 else:
                     self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(torch.float32))
-        # set_dtype_compat()
+        # set_dtype_compat(torch.float16)
 
         backup_embeds = self.transformer.get_input_embeddings()
         device = backup_embeds.weight.device
@@ -818,7 +817,7 @@ def prompt_handler(json_data):
                 current_clip_id = clip_id
                 steps = find_nearest_ksampler(clip_id)
                 if steps is not None:
-                    node["inputs"]["steps"] = steps
+                    node["inputs"]["smZ_steps"] = steps
                     if opts.debug:
                         print(f'[smZNodes] id: {current_clip_id} | steps: {steps}')
     tmp()

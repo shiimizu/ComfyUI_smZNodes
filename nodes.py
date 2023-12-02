@@ -48,7 +48,7 @@ class smZ_CLIPTextEncode:
                 "text_l": ("STRING", {"multiline": True, "placeholder": "CLIP_L"}),
             },
             "optional": {
-                "steps": ("INT", {"default": 1, "min": 1, "max": 0xffffffffffffffff}),
+                "smZ_steps": ("INT", {"default": 1, "min": 1, "max": 0xffffffffffffffff}),
             },
         }
     RETURN_TYPES = ("CONDITIONING",)
@@ -58,8 +58,9 @@ class smZ_CLIPTextEncode:
     def encode(self, clip: comfy.sd.CLIP, text, parser, mean_normalization,
                multi_conditioning, use_old_emphasis_implementation,
                with_SDXL, ascore, width, height, crop_w, 
-               crop_h, target_width, target_height, text_g, text_l, steps=1):
+               crop_h, target_width, target_height, text_g, text_l, smZ_steps=1):
         params = locals()
+        params['steps'] = params.pop('smZ_steps', smZ_steps)
         from .modules.shared import opts
         is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
 

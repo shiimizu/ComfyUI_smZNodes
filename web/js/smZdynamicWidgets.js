@@ -16,6 +16,11 @@ const findWidgetsByName = (node, name) => node.widgets.filter((w) => w.name.ends
 
 const doesInputWithNameExist = (node, name) => node.inputs ? node.inputs.some((input) => input.name === name) : false;
 
+// round in increments of x, with an offset
+function round(number, increment = 10, offset = 0) {
+    return Math.ceil((number - offset) / increment ) * increment + offset;
+}
+
 function toggleWidget(node, widget, show = false, suffix = "") {
     if (!widget || doesInputWithNameExist(node, widget.name)) return;
     if (!origProps[widget.name]) {
@@ -24,7 +29,7 @@ function toggleWidget(node, widget, show = false, suffix = "") {
     const origSize = node.size;
 
     widget.type = show ? origProps[widget.name].origType : HIDDEN_TAG + suffix;
-    widget.computeSize = show ? origProps[widget.name].origComputeSize : () => [0, -4];
+    widget.computeSize = show ? origProps[widget.name].origComputeSize : () => [0, -3.3];
 
     widget.linkedWidgets?.forEach(w => toggleWidget(node, w, ":" + widget.name, show));
 
@@ -53,7 +58,7 @@ function widgetLogic(node, widget) {
             // Prevents resizing on init/webpage reload
             if(widget.init === false) {
                 // Resize when set to false
-                node.setSize([node.size[0], Math.max(102, node.size[1]/1.5)])
+                node.setSize([node.size[0], Math.max(100, round(node.size[1]/1.5))])
             }
         } else {
             // When enabled, set init to false
@@ -154,14 +159,12 @@ function toggleMenuOption0(node, widget, _show = null, perform_action = true) {
     }
 }
 
-function toggle_all_settings_desc_widgets(node, widget_name = '', _show = null) {
-    let found_widgets = node.widgets.filter((w) => (widget_name ? widget_name : w.name).includes('info'));
-    let is_showing = true
+function toggle_all_settings_desc_widgets(node, _show = null) {
+    let found_widgets = node.widgets.filter((w) => w.name.includes('info'));
+    let is_showing = _show !== null ? _show : null
     found_widgets.forEach(w => {
-        if (w) {
-            toggleMenuOption(node, [w.name, w.name], _show)
-            is_showing = (w.type === origProps[w.name].origType)
-        }
+        toggleMenuOption(node, [w.name, w.name], _show)
+        is_showing = _show !== null ? _show : w.type === origProps[w.name].origType
     });
 
     let w = node.widgets.find((w) => w.name === 'extra');
@@ -179,7 +182,7 @@ function toggle_all_settings_desc_widgets(node, widget_name = '', _show = null) 
 
     // Collapse the node if the widgets aren't showing
     if (!is_showing) {
-        node.setSize([node.size[0], 0])
+        node.setSize([node.size[0], node.computeSize()[1]])
     }
 }
 
@@ -252,7 +255,7 @@ app.registerExtension({
                     // when node definitions change due to an update or some other error
                     value = {"show":true}
                 }
-                toggle_all_settings_desc_widgets(this, null, value.show)
+                toggle_all_settings_desc_widgets(this, value.show)
                 return r;
             }
 
@@ -288,7 +291,7 @@ app.registerExtension({
 
                 if (ids2.has(nodeType) || inGroupNode2) {
                     const content_hide_show = "Hide/show all descriptions";
-                    // customOptions.push(null) // seperator
+                    customOptions.push(null) // seperator
                     customOptions.push(create_custom_option(content_hide_show, toggle_all_settings_desc_widgets.bind(this, node)))
     
                     // Alternate way to cleanup MenuOption

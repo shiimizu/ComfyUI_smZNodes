@@ -110,7 +110,7 @@ class smZ_Settings:
     def INPUT_TYPES(s):
         from .modules.shared import opts
         return {"required": {
-                                "any": (anytype, {}),
+                                "clip": ("CLIP", ),
                                 },
                 "optional": {
                     "extra": ("STRING", {"multiline": True, "default": '{"show":true}'}),
@@ -152,8 +152,7 @@ class smZ_Settings:
                     "info_debug": ("STRING", {"multiline": True, "default": "Debugging messages in the console."}),
                     "Debug": (BOOLEAN, {"default": opts.debug, "label_on": "on", "label_off": "off"}),
                 }}
-    RETURN_TYPES = (anytype,)
-    RETURN_NAMES = ("ANY",)
+    RETURN_TYPES = ("CLIP",)
     OUTPUT_NODE = False
     FUNCTION = "run"
     CATEGORY = "advanced"
@@ -162,7 +161,7 @@ class smZ_Settings:
         from .modules.shared import opts
         device = comfy.model_management.get_torch_device()
 
-        _any = kwargs.pop('any', None)
+        clip = kwargs.pop('clip', None) if 'clip' in kwargs else args[0]
         kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
         kwargs['comma_padding_backtrack'] = kwargs.pop('Prompt word wrap length limit')
         kwargs['comma_padding_backtrack'] = max(min(kwargs['comma_padding_backtrack'], 74), 0)
@@ -182,7 +181,7 @@ class smZ_Settings:
             device = torch.device("cpu")
         _prepare_noise = partial(prepare_noise, device=device.type)
         comfy.sample.prepare_noise = _prepare_noise
-        return (_any,)
+        return (clip,)
 
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique

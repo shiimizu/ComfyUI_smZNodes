@@ -58,35 +58,34 @@ should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_
 class ClipTextEncoderCustom:
 
     def _forward(self: comfy.sd1_clip.SD1ClipModel, tokens):
-        def set_dtype_compat(dtype):
+        def set_dtype_compat(dtype, newv = False):
             dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
             _p = should_use_fp16_signature.parameters
             # newer versions of ComfyUI upcasts the transformer embeddings, which is technically correct
             # when it's a newer version, we want to downcast it to torch.float16, so set newv=True
-            newv = False
             # newv = 'device' in _p and 'prioritize_performance' in _p # comment this to have default comfy behaviour
             if dtype_num(dtype) >= 32:
                 newv = False
-            if newv:
-                dtype = devices.dtype if dtype != devices.dtype else dtype
-                # self.transformer.text_model.embeddings.position_embedding.to(dtype)
-                # self.transformer.text_model.embeddings.token_embedding.to(dtype)
-                inner_model = getattr(self.transformer, self.inner_name, None)
-                if inner_model is not None and hasattr(inner_model, "embeddings"):
-                    inner_model.embeddings.to(dtype)
-                else:
-                    self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype))
-        def reset_dtype_compat(newv):
-            if newv:
-                # token_embedding_dtype = position_embedding_dtype = torch.float32
-                # self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
-                # self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
-                inner_model = getattr(self.transformer, self.inner_name, None)
-                if inner_model is not None and hasattr(inner_model, "embeddings"):
-                    inner_model.embeddings.to(torch.float32)
-                else:
-                    self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(torch.float32))
-        # set_dtype_compat(torch.float16)
+            if not newv: return
+            dtype = devices.dtype if dtype != devices.dtype else dtype
+            # self.transformer.text_model.embeddings.position_embedding.to(dtype)
+            # self.transformer.text_model.embeddings.token_embedding.to(dtype)
+            inner_model = getattr(self.transformer, self.inner_name, None)
+            if inner_model is not None and hasattr(inner_model, "embeddings"):
+                inner_model.embeddings.to(dtype)
+            else:
+                self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype))
+        def reset_dtype_compat():
+            # token_embedding_dtype = position_embedding_dtype = torch.float32
+            # self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
+            # self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
+            inner_model = getattr(self.transformer, self.inner_name, None)
+            if inner_model is not None and hasattr(inner_model, "embeddings"):
+                inner_model.embeddings.to(torch.float32)
+            else:
+                self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(torch.float32))
+        enable_compat = False
+        if enable_compat: set_dtype_compat(torch.float16, enable_compat)
 
         backup_embeds = self.transformer.get_input_embeddings()
         device = backup_embeds.weight.device
@@ -94,14 +93,17 @@ class ClipTextEncoderCustom:
         tokens = torch.LongTensor(tokens).to(device)
 
         # dtype=backup_embeds.weight.dtype
-        dtype = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm.weight.dtype
+        if hasattr(self.transformer, 'dtype'):
+            dtype = self.transformer.dtype
+        else:
+            dtype = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm.weight.dtype
 
         if dtype != torch.float32:
             precision_scope = torch.autocast
         else:
             precision_scope = lambda a, dtype=None: contextlib.nullcontext(a)
 
-        with precision_scope(model_management.get_autocast_device(device), dtype=dtype): # , torch.float32):
+        with precision_scope(model_management.get_autocast_device(device), dtype=dtype if enable_compat else torch.float32):
             attention_mask = None
             if self.enable_attention_masks:
                 attention_mask = torch.zeros_like(tokens)
@@ -112,32 +114,23 @@ class ClipTextEncoderCustom:
                         if tokens[x, y] == max_token:
                             break
 
-            outputs = self.transformer(input_ids=tokens, attention_mask=attention_mask, output_hidden_states=self.layer=="hidden")
+            outputs = self.transformer(tokens, attention_mask, intermediate_output=self.layer_idx, final_layer_norm_intermediate=self.layer_norm_hidden_state)
             self.transformer.set_input_embeddings(backup_embeds)
 
             if self.layer == "last":
-                z = outputs.last_hidden_state
-            elif self.layer == "pooled":
-                z = outputs.pooler_output[:, None, :]
+                z = outputs[0]
             else:
-                z = outputs.hidden_states[self.layer_idx]
-                if self.layer_norm_hidden_state:
-                    try:
-                        z = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm(z.to(device=device, dtype=dtype)) # (z)
-                    except Exception as err:
-                        if opts.debug:
-                            print("[smZNodes] ERROR final_layer_norm:", err)
-                        z = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm(z)
+                z = outputs[1]
 
-
-            if hasattr(outputs, "pooler_output"):
-                pooled_output = outputs.pooler_output.float()
+            if outputs[2] is not None:
+                pooled_output = outputs[2].float()
             else:
                 pooled_output = None
 
+            if enable_compat: reset_dtype_compat()
+
             if self.text_projection is not None and pooled_output is not None:
                 pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
-            # reset_dtype_compat(True)
         return z.float(), pooled_output
 
     def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):

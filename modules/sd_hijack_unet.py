@@ -114,7 +114,7 @@ def hijack_ddpm_edit():
 
 
 unet_needs_upcast = lambda *args, **kwargs: devices.unet_needs_upcast
-CondFunc('comfy.model_base.BaseModel.apply_model', apply_model, unet_needs_upcast)
+# CondFunc('comfy.model_base.BaseModel.apply_model', apply_model, unet_needs_upcast)
 # CondFunc('ldm.models.diffusion.ddpm.LatentDiffusion.apply_model', apply_model, unet_needs_upcast)
 # CondFunc('ldm.modules.diffusionmodules.openaimodel.timestep_embedding', lambda orig_func, timesteps, *args, **kwargs: orig_func(timesteps, *args, **kwargs).to(torch.float32 if timesteps.dtype == torch.int64 else devices.dtype_unet), unet_needs_upcast)
 # if version.parse(torch.__version__) <= version.parse("1.13.2") or torch.cuda.is_available():

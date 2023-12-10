@@ -205,31 +205,26 @@ app.registerExtension({
         const nodeType = node.type || node.constructor?.type
         let inGroupNode = false
         let inGroupNode2 = false
-        let innerNodes = node.getInnerNodes?.()
-        if (innerNodes) {
-            for (const inode of innerNodes) {
-                const _nodeType = inode.type || inode.constructor?.type
-                if (ids1.has(_nodeType))
-                    inGroupNode = ids1.has(_nodeType)
-                if (inGroupNode)
-                    ids1.add(nodeType) // GroupNode's type
-                if (ids2.has(_nodeType))
-                    inGroupNode2 = ids2.has(_nodeType)
-                if (inGroupNode2)
-                    ids2.add(nodeType) // GroupNode's type
+        let nodeData = node.constructor?.nodeData
+        if (nodeData) {
+            for(let sym of Object.getOwnPropertySymbols(nodeData) ) {
+                const nds = nodeData[sym];
+                const nodes = nds?.nodeData?.nodes
+                if (nodes) {
+                    for (const _node of nodes) {
+                        const _nodeType = _node.type
+                        if (ids1.has(_nodeType))
+                            inGroupNode = true
+                        if (inGroupNode)
+                            ids1.add(nodeType) // GroupNode's type
+                        if (ids2.has(_nodeType))
+                            inGroupNode2 = true
+                        if (inGroupNode2)
+                            ids2.add(nodeType) // GroupNode's type
+                    }
+                }
             }
         }
-        // let nodeData = node.constructor?.nodeData
-        // if (nodeData) {
-        //     for(let sym of Object.getOwnPropertySymbols(nodeData) ) {
-        //     const nds = nodeData[sym];
-        //     if (nds) {
-        //         inGroupNode=true
-        //         inGroupNode2=true
-        //         break
-        //     }
-        //     }
-        // }
         // ClipTextEncode++ node
         if (ids1.has(nodeType) || inGroupNode) {
             node.widgets.forEach(w => w._name = w.name)

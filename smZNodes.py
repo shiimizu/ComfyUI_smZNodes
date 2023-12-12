@@ -59,81 +59,58 @@ class PopulateVars:
 should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_fp16)
 class ClipTextEncoderCustom:
 
-    def _forward(self: comfy.sd1_clip.SD1ClipModel, tokens):
-        def set_dtype_compat(dtype, newv = False):
-            dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
+    def _forward(self: comfy.sd1_clip.SDClipModel, tokens):
+        def set_embeddings_dtype(dtype = torch.float16, newv = False):
+            # dtype_num = lambda d : int(re.sub(r'.*?(\d+)', r'\1', repr(d)))
             _p = should_use_fp16_signature.parameters
             # newer versions of ComfyUI upcasts the transformer embeddings, which is technically correct
-            # when it's a newer version, we want to downcast it to torch.float16, so set newv=True
+            # when it's a newer version, we want to downcast it if we aren't running with --force-fp32
             # newv = 'device' in _p and 'prioritize_performance' in _p # comment this to have default comfy behaviour
-            if dtype_num(dtype) >= 32:
-                newv = False
+            # if dtype_num(dtype) >= 32:
+            #     newv = False
             if not newv: return
-            dtype = devices.dtype if dtype != devices.dtype else dtype
+            # dtype = devices.dtype if dtype != devices.dtype else dtype
             # self.transformer.text_model.embeddings.position_embedding.to(dtype)
             # self.transformer.text_model.embeddings.token_embedding.to(dtype)
-            inner_model = getattr(self.transformer, self.inner_name, None)
+            if hasattr(self, 'inner_name'):
+                inner_model = getattr(self.transformer, self.inner_name, None)
+            else:
+                inner_model = None
             if inner_model is not None and hasattr(inner_model, "embeddings"):
                 inner_model.embeddings.to(dtype)
             else:
                 self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype))
-        def reset_dtype_compat():
+            try: self.transformer.to(dtype=dtype)
+            except Exception as e: 
+                if opts.debug: print(e)
+            try: self.transformer.text_model.to(dtype=dtype)
+            except Exception as e: 
+                if opts.debug: print(e)
+        def reset_embeddings_dtype():
             # token_embedding_dtype = position_embedding_dtype = torch.float32
             # self.transformer.text_model.embeddings.token_embedding.to(token_embedding_dtype)
             # self.transformer.text_model.embeddings.position_embedding.to(position_embedding_dtype)
-            inner_model = getattr(self.transformer, self.inner_name, None)
+            dtype=torch.float32
+            if hasattr(self, 'inner_name'):
+                inner_model = getattr(self.transformer, self.inner_name, None)
+            else:
+                inner_model = None
             if inner_model is not None and hasattr(inner_model, "embeddings"):
-                inner_model.embeddings.to(torch.float32)
+                inner_model.embeddings.to(dtype=dtype)
             else:
-                self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(torch.float32))
+                self.transformer.set_input_embeddings(self.transformer.get_input_embeddings().to(dtype=dtype))
+            try: self.transformer.to(dtype=dtype)
+            except Exception as e:
+                if opts.debug: print(e)
+            try: self.transformer.text_model.to(dtype=dtype)
+            except Exception as e:
+                if opts.debug: print(e)
+
         enable_compat = False
-        if enable_compat: set_dtype_compat(torch.float16, enable_compat)
-
-        backup_embeds = self.transformer.get_input_embeddings()
-        device = backup_embeds.weight.device
-        tokens = self.set_up_textual_embeddings(tokens, backup_embeds)
-        tokens = torch.LongTensor(tokens).to(device)
-
-        # dtype=backup_embeds.weight.dtype
-        if hasattr(self.transformer, 'dtype'):
-            dtype = self.transformer.dtype
-        else:
-            dtype = getattr(self.transformer, self.inner_name, self.transformer.text_model).final_layer_norm.weight.dtype
-
-        if dtype != torch.float32:
-            precision_scope = torch.autocast
-        else:
-            precision_scope = lambda a, dtype=None: contextlib.nullcontext(a)
-
-        with precision_scope(model_management.get_autocast_device(device), dtype=dtype if enable_compat else torch.float32):
-            attention_mask = None
-            if self.enable_attention_masks:
-                attention_mask = torch.zeros_like(tokens)
-                max_token = self.transformer.get_input_embeddings().weight.shape[0] - 1
-                for x in range(attention_mask.shape[0]):
-                    for y in range(attention_mask.shape[1]):
-                        attention_mask[x, y] = 1
-                        if tokens[x, y] == max_token:
-                            break
-
-            outputs = self.transformer(tokens, attention_mask, intermediate_output=self.layer_idx, final_layer_norm_intermediate=self.layer_norm_hidden_state)
-            self.transformer.set_input_embeddings(backup_embeds)
-
-            if self.layer == "last":
-                z = outputs[0]
-            else:
-                z = outputs[1]
-
-            if outputs[2] is not None:
-                pooled_output = outputs[2].float()
-            else:
-                pooled_output = None
-
-            if enable_compat: reset_dtype_compat()
-
-            if self.text_projection is not None and pooled_output is not None:
-                pooled_output = pooled_output.float().to(self.text_projection.device) @ self.text_projection.float()
-        return z.float(), pooled_output
+        if enable_compat: set_embeddings_dtype(newv=enable_compat)
+        z, pooled_output = self.forward(tokens)
+        if enable_compat: reset_embeddings_dtype()
+        return z.to(dtype=torch.float16) if enable_compat else z, pooled_output
 
     def encode_with_transformers_comfy_(self, tokens: List[List[int]], return_pooled=False):
         tokens_orig = tokens
@@ -436,9 +413,6 @@ class ClipTokenWeightEncoder:
                 cond = reconstruct_schedules(schedules, current_step)
                 if type(cond) is tuple:
                     conds_list, cond = cond
-                pooled = cond.pooled.cpu()
-                cond = cond.cpu()
-                cond.pooled = pooled
                 cond.pooled.conds_list = conds_list
                 cond.pooled.schedules = schedules
             else:
@@ -459,10 +433,7 @@ class ClipTokenWeightEncoder:
                 # non-sdxl will be something like: {"l": [[]]}
                 if isinstance(token_weight_pairs, dict):
                     token_weight_pairs = next(iter(token_weight_pairs.values()))
-                cond = encode_toks(token_weight_pairs) 
-                pooled = cond.pooled.cpu()
-                cond = cond.cpu()
-                cond.pooled = pooled
+                cond = encode_toks(token_weight_pairs)
                 cond.pooled.conds_list = conds_list
         finally:
                 model_hijack.undo_hijack(model_hijack.cond_stage_model)
@@ -722,7 +693,10 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         gen_id = lambda : binascii.hexlify(os.urandom(1024))[64:72]
         id=gen_id()
         schedules = getattr(pooled, 'schedules', [[(0, 1.0)]])
-        pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": pooled.conds_list, **sdxl_params}
+        conds_list=pooled.conds_list
+        pooled=pooled.to(model_management.intermediate_device())
+        pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": conds_list, **sdxl_params}
+        cond=cond.to(model_management.intermediate_device())
         out = [[cond, pooled]]
         if is_prompt_editing(schedules):
             for x in range(1,steps):
@@ -731,13 +705,13 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                     if type(cond) is tuple:
                         conds_list, cond = cond
                         pooled['conds_list'] = conds_list
-                    cond=cond.cpu()
+                    cond=cond
                 elif type(schedules) is dict and len(schedules) == 1: # SDXLRefiner
                     cond = reconstruct_schedules(next(iter(schedules.values())), x)
                     if type(cond) is tuple:
                         conds_list, cond = cond
                         pooled['conds_list'] = conds_list
-                    cond=cond.cpu()
+                    cond=cond
                 elif type(schedules) is dict:
                     g_out = reconstruct_schedules(schedules['g'], x)
                     if type(g_out) is tuple: _, g_out = g_out
@@ -745,9 +719,10 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                     if type(l_out) is tuple: _, l_out = l_out
                     g_out, l_out = expand(g_out, l_out)
                     l_out, g_out = expand(l_out, g_out)
-                    cond = torch.cat([l_out, g_out], dim=-1).cpu()
+                    cond = torch.cat([l_out, g_out], dim=-1)
                 else:
                     raise NotImplementedError
+                cond=cond.to(model_management.intermediate_device())
                 out = out + [[cond, pooled]]
         out[0][1]['orig_len'] = len(out)
     return (out,)
@@ -883,8 +858,8 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         cond_scale=kwargs['cond_scale'] if 'cond_scale' in kwargs else args[4]
         model_options=kwargs['model_options'] if 'model_options' in kwargs else {}
 
-        cc=calc_cond(cond, self.step)
-        uu=calc_cond(uncond, self.step)
+        cc=get_cond(cond, self.step)
+        uu=get_cond(uncond, self.step)
         self.step += 1
 
         if (any([getp(p).get('from_smZ', False) for p in cc]) or 

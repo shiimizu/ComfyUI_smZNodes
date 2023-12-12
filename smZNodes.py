@@ -752,7 +752,7 @@ def prompt_handler(json_data):
 
             while(True):
                 # Base case: it's a direct value
-                if isinstance(steps_input_value, (int, float, str)):
+                if is_number(steps_input_value):
                     return min(max(1, int(steps_input_value)), 10000)
 
                 # Loop case: it's a reference to another node
@@ -786,6 +786,12 @@ def prompt_handler(json_data):
 
             return False
 
+        def is_number(s):
+            try:
+                float(s)
+                return True
+            except (ValueError, TypeError):
+                return False
 
         # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
         for clip_id, node in data.items():

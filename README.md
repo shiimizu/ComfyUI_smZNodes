@@ -30,8 +30,9 @@ Simple prompts generate _identical_ images. More complex prompts with complex at
 
 - [Prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
     - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
+- [`AND`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#composable-diffusion) keyword (Composable Diffusion)
+- [`BREAK`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#break-keyword) keyword (same as ConditioningConcat node)
 - Weight normalization
-- Usage of `BREAK` and `AND` keywords
 - Optional `embedding:` identifier
 
 ### Installation
@@ -93,12 +94,12 @@ Image slider links:
 
 |Name|Description|
 | --- | --- |
-| `parser` | The parser selected to parse prompts into tokens and then transformed (encoded) into embeddings. Taken from [`automatic`](https://github.com/vladmandic/automatic/discussions/99#discussioncomment-5931014). |
+| `parser` | The parser selected to parse prompts into tokens and then transformed (encoded) into embeddings. Taken from [SD.Next](https://github.com/vladmandic/automatic/discussions/99#discussioncomment-5931014). |
 | `mean_normalization` | Whether to take the mean of your prompt weights. It's `true` by default on `stable-diffusion-webui`.<br>This is implemented according to `stable-diffusion-webui`. (They say that it's probably not the correct way to take the mean.) |
-| `multi_conditioning` | This is usually set to `true` for your positive prompt and `false` for your negative prompt. <blockquote> For each prompt, the list is obtained by splitting the prompt using the `AND` separator. <br>See [Compositional Visual Generation with Composable Diffusion Models](https://energy-based-model.github.io/Compositional-Visual-Generation-with-Composable-Diffusion-Models/) </blockquote> |
+| `multi_conditioning` | <blockquote> For each prompt, the list is obtained by splitting the prompt using the `AND` separator. <br>See: [Compositional Visual Generation with Composable Diffusion Models](https://energy-based-model.github.io/Compositional-Visual-Generation-with-Composable-Diffusion-Models/) </blockquote> |
 |`use_old_emphasis_implementation`| <blockquote>Use old emphasis implementation. Can be useful to reproduce old seeds.</blockquote>|
 
-> [!IMPORTANT]  
+> [!TIP]  
 > You can right click the node to show/hide some of the widgets. E.g. the `with_SDXL` option.
 
 <br>
@@ -108,14 +109,14 @@ Image slider links:
 | `comfy`           | The default way `ComfyUI` handles everything                                     |
 | `comfy++`         | Uses `ComfyUI`'s parser but encodes tokens the way `stable-diffusion-webui` does, allowing to take the mean as they do. |
 | `A1111`           | The default parser used in `stable-diffusion-webui`                              |
-| `full`            | Same as `A1111` but whitespaces and newlines are stripped                        |
+| `full`            | Same as `A1111` but whitespaces, newlines, and special characters are stripped                        |
 | `compel`          | Uses [`compel`](https://github.com/damian0815/compel)                            |
 | `fixed attention` | Prompt is untampered with                                                        |
 
-> **Note**  
+> [!IMPORTANT]  
 > Every `parser` except `comfy` uses `stable-diffusion-webui`'s encoding pipeline.
 
-> **Warning**  
+> [!WARNING]  
 > LoRA syntax (`<lora:name:1.0>`) is not suppprted.
 
 ## Settings
@@ -133,7 +134,7 @@ This node can change whenever it is updated, so you may have to recreate the nod
 
 ## Tips to get reproducible results on both UIs
 - Use the same seed, sampler settings, RNG (CPU or GPU), clip skip (CLIP Set Last Layer), etc.
-- Ancestral samplers may not be deterministic.
+- Ancestral and SDE samplers may not be deterministic.
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.
 

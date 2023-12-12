@@ -4,7 +4,7 @@ import torch
 from typing import List, Tuple
 from functools import partial
 from .modules import prompt_parser, shared, devices
-from .modules.shared import opts
+from .modules.shared import opts, opts_default
 from .modules.sd_samplers_cfg_denoiser import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
@@ -12,6 +12,7 @@ from .modules.textual_inversion.textual_inversion import Embedding
 import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
+import comfy.utils
 from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -24,9 +25,10 @@ import importlib
 import sys
 import os
 import re
-import contextlib
 import itertools
 import binascii
+import math
+import copy
 
 try:
     from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
@@ -617,6 +619,14 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                multi_conditioning, use_old_emphasis_implementation, with_SDXL,
                ascore, width, height, crop_w, crop_h, target_width, target_height,
                text_g, text_l, steps=1, step=0):
+    # clip_clone = clip.clone()
+    clip_clone = clip
+    if (opts_new := clip_clone.patcher.model_options.get('smZ_opts', None)) is not None:
+        for k,v in opts_new.__dict__.items():
+            setattr(opts, k, v)
+    else:
+        for k,v in opts_default.__dict__.items():
+            setattr(opts, k, v)
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
@@ -675,8 +685,6 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             else:
                 texts = {"g": texts, "l": texts}
 
-        # clip_clone = clip.clone()
-        clip_clone = clip
         clip_clone.cond_stage_model_orig = clip_clone.cond_stage_model
         clip_clone.cond_stage_model.encode_token_weights_orig = clip_clone.cond_stage_model.encode_token_weights
 
@@ -833,7 +841,7 @@ def get_adm(c):
     return None
 
 getp=lambda x: x[1] if type(x) is list else x
-def calc_cond(c, current_step):
+def get_cond(c, current_step):
     """Group by smZ conds that may do prompt-editing / regular conds / comfy conds."""
     _cond = []
     # Group by conds from smZ

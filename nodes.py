@@ -11,6 +11,7 @@ import comfy.sd
 import comfy.model_management
 import comfy.samplers
 import comfy.sample
+import copy
 
 BOOLEAN = [False, True]
 try:
@@ -158,7 +159,7 @@ class smZ_Settings:
     CATEGORY = "advanced"
 
     def run(self, *args, **kwargs):
-        from .modules.shared import opts
+        from .modules.shared import opts as _opts
         device = comfy.model_management.get_torch_device()
 
         clip = kwargs.pop('clip', None) if 'clip' in kwargs else args[0]
@@ -171,9 +172,13 @@ class smZ_Settings:
         kwargs['randn_source'] = kwargs.pop('RNG')
         kwargs['eta_noise_seed_delta'] = kwargs.pop('ENSD')
         
+        opts = copy.deepcopy(_opts)
         [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
         for k,v in kwargs.items():
             setattr(opts, k, v)
+
+        clip = clip.clone()
+        clip.patcher.model_options['smZ_opts'] = opts
 
         if not hasattr(comfy.sample, 'prepare_noise_orig'):
             comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise

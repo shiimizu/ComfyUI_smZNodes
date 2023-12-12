@@ -1,6 +1,6 @@
 from comfy.model_management import vram_state, VRAMState
 import logging
-import sys
+import copy
 from comfy.cli_args import args
 from comfy import model_management
 from . import devices
@@ -68,11 +68,12 @@ opts.use_CFGDenoiser = False
 opts.sgm_noise_multiplier = True
 opts.debug= False
 
-
 opts.sdxl_crop_top = 0
 opts.sdxl_crop_left = 0
 opts.sdxl_refiner_low_aesthetic_score = 2.5
 opts.sdxl_refiner_high_aesthetic_score = 6.0
+
+opts_default = copy.deepcopy(opts)
 
 sd_model = Options()
 sd_model.cond_stage_model = Options()
@@ -83,7 +84,7 @@ opts.batch_cond_uncond = False
 cmd_opts.lowvram = vram_state == VRAMState.LOW_VRAM
 cmd_opts.medvram = vram_state == VRAMState.NORMAL_VRAM
 should_batch_cond_uncond = lambda: opts.batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
-opts.batch_cond_uncond = should_batch_cond_uncond()
+opts.batch_cond_uncond = True
 
 cmd_opts.xformers = xformers_available
 cmd_opts.force_enable_xformers = xformers_available

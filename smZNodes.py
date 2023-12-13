@@ -282,7 +282,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
             if (fragment:=word[last_end:]):
                 leftovers.append(fragment)
                 word_new = ''.join(leftovers)
-                tokens.append([(t, weight) for t in self.tokenizer(word)["input_ids"][self.tokens_start:-1]])
+                tokens.append([(t, weight) for t in self.tokenizer(word_new)["input_ids"][self.tokens_start:-1]])
 
     #reshape token array to CLIP input size
     batched_tokens = []

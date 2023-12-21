@@ -148,7 +148,7 @@ class smZ_Settings:
                     "Use previous prompt editing timelines": (BOOLEAN, {"default": opts.use_old_scheduling}),
                     
                     "ㅤ"*6: ("STRING", {"multiline": False, "default": "Experimental"}),
-                    "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to get identical images regardless of the prompt."}),
+                    "info_use_CFGDenoiser": ("STRING", {"multiline": True, "default": "CFGDenoiser\nAn experimental option to use stable-diffusion-webui's denoiser. It may not work as expected with inpainting/UnCLIP models or ComfyUI's Conditioning nodes, but it allows you to disable batch_cond_uncond and have different looking results."}),
                     "Use CFGDenoiser": (BOOLEAN, {"default": opts.use_CFGDenoiser}),
                     "info_debug": ("STRING", {"multiline": True, "default": "Debugging messages in the console."}),
                     "Debug": (BOOLEAN, {"default": opts.debug, "label_on": "on", "label_off": "off"}),

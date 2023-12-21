@@ -5,7 +5,7 @@ from typing import List, Tuple
 from functools import partial
 from .modules import prompt_parser, shared, devices
 from .modules.shared import opts, opts_default
-from .modules.sd_samplers_cfg_denoiser import CFGDenoiser
+from .modules.sd_samplers_cfg_denoiser import CFGDenoiser, ReturnEarly
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from .modules.textual_inversion.textual_inversion import Embedding
@@ -17,6 +17,7 @@ from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, t
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy import model_management
+import comfy.samplers
 import inspect
 from textwrap import dedent, indent
 import functools
@@ -394,9 +395,8 @@ def expand(tensor1, tensor2):
     return (tensor1, tensor2)
 
 def reconstruct_schedules(schedules, step):
-    create_reconstruct_fn = lambda _cc: prompt_parser.reconstruct_multicond_batch if type(_cc).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
-    reconstruct_fn = create_reconstruct_fn(schedules)
-    return reconstruct_fn(schedules, step)
+    fn = prompt_parser.reconstruct_multicond_batch if type(schedules).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
+    return fn(schedules, step)
 
 
 class ClipTokenWeightEncoder:
@@ -413,6 +413,9 @@ class ClipTokenWeightEncoder:
                 cond = reconstruct_schedules(schedules, current_step)
                 if type(cond) is tuple:
                     conds_list, cond = cond
+                pooled = cond.pooled.to(model_management.intermediate_device())
+                cond = cond.to(model_management.intermediate_device())
+                cond.pooled = pooled
                 cond.pooled.conds_list = conds_list
                 cond.pooled.schedules = schedules
             else:
@@ -425,9 +428,9 @@ class ClipTokenWeightEncoder:
                         multipliers = [x[1] for x in batch_chunk]
                         z = model_hijack.cond_stage_model.process_tokens([tokens], [multipliers])
                         if first_pooled == None:
-                            first_pooled = z.pooled
+                            first_pooled = z.pooled.to(model_management.intermediate_device())
                         zs.append(z)
-                    zcond = torch.hstack(zs)
+                    zcond = torch.hstack(zs).to(model_management.intermediate_device())
                     zcond.pooled = first_pooled
                     return zcond
                 # non-sdxl will be something like: {"l": [[]]}
@@ -490,12 +493,16 @@ def is_prompt_editing(schedules):
     if schedules == None: return False
     if not isinstance(schedules, dict):
         schedules = {'g': schedules}
+    ret = False
     for k,v in schedules.items():
         if type(v) == list:
-            if len(v[0]) != 1: return True
+            for vb in v:
+                if len(vb) != 1: ret = True
         else:
-            if len(v.batch[0][0].schedules) != 1: return True
-    return False
+            for vb in v.batch:
+                for cs in vb:
+                    if len(cs.schedules) != 1: ret = True
+    return ret
 
 # ===================================================================
 # RNG
@@ -607,13 +614,14 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         # This is what comfy does by default
         opts.batch_cond_uncond = True
         
-    parser_d = {"full": "Full parser",
-            "compel": "Compel parser",
-            "A1111": "A1111 parser",
-            "fixed attention": "Fixed attention",
-            "comfy++": "Comfy++ parser",
-            }
-    opts.prompt_attention = parser_d.get(parser, "Comfy parser")
+    parser_map = {
+        "full": "Full parser",
+        "compel": "Compel parser",
+        "A1111": "A1111 parser",
+        "fixed attention": "Fixed attention",
+        "comfy++": "Comfy++ parser",
+    }
+    opts.prompt_attention = parser_map.get(parser, "Comfy parser")
 
     sdxl_params = {}
     if with_SDXL and is_sdxl:
@@ -694,12 +702,11 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         id=gen_id()
         schedules = getattr(pooled, 'schedules', [[(0, 1.0)]])
         conds_list=pooled.conds_list
-        pooled=pooled.to(model_management.intermediate_device())
         pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": conds_list, **sdxl_params}
-        cond=cond.to(model_management.intermediate_device())
         out = [[cond, pooled]]
         if is_prompt_editing(schedules):
-            for x in range(1,steps):
+            conds=[]
+            for x in range(0,steps):
                 if type(schedules) is not dict:
                     cond=reconstruct_schedules(schedules, x)
                     if type(cond) is tuple:
@@ -722,9 +729,48 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                     cond = torch.cat([l_out, g_out], dim=-1)
                 else:
                     raise NotImplementedError
-                cond=cond.to(model_management.intermediate_device())
-                out = out + [[cond, pooled]]
+
+                if conds == []:
+                    conds=[[] for _ in range(len(cond))]
+
+                for ix, icond in enumerate(cond.chunk(len(cond))):
+                    conds[ix] += [icond]
+
+            # conds.reverse()
+            # if all the same, only take the first cond
+            for ix in range(len(conds)):
+                if all((conds[ix][0] == icond).all().item() for icond in conds[ix]):
+                    conds[ix] = [conds[ix][0]]
+
+            out=[]
+            for ix, icl in enumerate(conds):
+                id = gen_id()
+                current_conds_list=[[copy.deepcopy(conds_list[0][ix])]]
+                for icond in icl:
+                    pooled = pooled.copy()
+                    pooled['smZid'] = id
+                    pooled['conds_list'] = current_conds_list
+                    out.append([icond.to(model_management.intermediate_device()), pooled])
+                
         out[0][1]['orig_len'] = len(out)
+        out[0][1]['orig_cond'] = out[0][0]
+
+        if multi_conditioning and len(conds_list[0]) > 1 and not is_prompt_editing(schedules):
+            if clip_clone.patcher.model_options.get('smZ_opts', None) is None:
+                opts.use_CFGDenoiser = True
+
+            _out = out
+            out = []
+            for ix, zx in enumerate(_out[0][0].chunk(len(_out[0][0]))):
+                o = copy.deepcopy(_out[0])
+                o[1]['smZid'] = gen_id()
+                o[1]['conds_list'] = [[copy.deepcopy(conds_list[0][ix])]]
+                o[0] = zx
+                out.append(o)
+            # if len(out) > 1: out.reverse()
+    
+    out[0][1]['opts'] = copy.deepcopy(opts)
+
     return (out,)
 
 # ========================================================================
@@ -816,39 +862,52 @@ def get_adm(c):
     return None
 
 getp=lambda x: x[1] if type(x) is list else x
-def get_cond(c, current_step):
+def get_cond(c, current_step, reverse=False):
     """Group by smZ conds that may do prompt-editing / regular conds / comfy conds."""
-    _cond = []
-    # Group by conds from smZ
-    fn=lambda x : getp(x).get("from_smZ", None) is not None
-    an_iterator = itertools.groupby(c, fn )
-    for key, group in an_iterator:
-        ls=list(group)
-        # Group by prompt-editing conds
-        fn2=lambda x : getp(x).get("smZid", None)
-        an_iterator2 = itertools.groupby(ls, fn2)
-        for key2, group2 in an_iterator2:
-            ls2=list(group2)
-            if key2 is not None:
-                orig_len = getp(ls2[0]).get('orig_len', 1)
-                i = bounded_modulo(current_step, orig_len - 1)
-                _cond = _cond + [ls2[i]]
+    if not reverse: _cond = []
+    else: _all = []
+    fn2=lambda x : getp(x).get("smZid", None)
+    prompt_editing = False
+    for key, group in itertools.groupby(c, fn2):
+        lsg=list(group)
+        if key is not None:
+            i = min(len(lsg)-1, current_step)
+            if len(lsg) != 1: prompt_editing = True
+            if not reverse: _cond.append(lsg[i])
+            else: _all.append(lsg)
+        else:
+            if not reverse: _cond.extend(lsg)
             else:
-                _cond = _cond + ls2
-    return _cond
+                lsg.reverse()
+                _all.append(lsg)
+    
+    if reverse:
+        ls=_all
+        ls.reverse()
+        result=[]
+        for d in ls:
+            if isinstance(d, list):
+                result.extend(d)
+            else:
+                result.append(d)
+        del ls,_all
+        return (result, prompt_editing)
+    return (_cond, prompt_editing)
 
 CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
 class CFGNoisePredictor(CFGNoisePredictorOrig):
     def __init__(self, model):
         super().__init__(model)
         self.step = 0
-        self.inner_model2 = CFGDenoiser(model.apply_model)
-        self.s_min_uncond = opts.s_min_uncond
+        self.inner_model0 = model
+        self.inner_model2 = CFGDenoiser(self.inner_model.apply_model)
         self.c_adm = None
         self.init_cond = None
         self.init_uncond = None
-        self.is_prompt_editing_u = False
-        self.is_prompt_editing_c = False
+        self.is_prompt_editing_c = True
+        self.is_prompt_editing_u = True
+        self.use_CFGDenoiser = None
+
 
     def apply_model(self, *args, **kwargs):
         x=kwargs['x'] if 'x' in kwargs else args[0]
@@ -858,51 +917,133 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         cond_scale=kwargs['cond_scale'] if 'cond_scale' in kwargs else args[4]
         model_options=kwargs['model_options'] if 'model_options' in kwargs else {}
 
-        cc=get_cond(cond, self.step)
-        uu=get_cond(uncond, self.step)
+        # reverse doesn't work for some reason???
+        # if self.init_cond is None:
+        #     if len(cond) != 1 and any(['smZid' in ic for ic in cond]):
+        #         self.init_cond = get_cond(cond, self.step, reverse=True)[0]
+        #     else:
+        #         self.init_cond = cond
+        # cond = self.init_cond
+
+        # if self.init_uncond is None:
+        #     if len(uncond) != 1 and any(['smZid' in ic for ic in uncond]):
+        #         self.init_uncond = get_cond(uncond, self.step, reverse=True)[0]
+        #     else:
+        #         self.init_uncond = uncond
+        # uncond = self.init_uncond
+
+        if self.is_prompt_editing_c:
+            cc, ccp=get_cond(cond, self.step)
+            self.is_prompt_editing_c=ccp
+            if 'cond' in kwargs: kwargs['cond'] = cc
+            else: args[2]=cc
+        else: cc = cond
+
+        if self.is_prompt_editing_u:
+            uu, uup=get_cond(uncond, self.step)
+            self.is_prompt_editing_u=uup
+            if 'uncond' in kwargs: kwargs['uncond'] = uu
+            else: args[3]=uu
+        else: uu = uncond
+
+        # extends a conds_list to the number of latent images
+        if not hasattr(self.inner_model2, 'conds_list'):
+            conds_list = []
+            for ccp in cc:
+                cpl = ccp['conds_list'] if 'conds_list' in ccp else [[(0, 1.0)]]
+                conds_list.extend(cpl[0])
+            conds_list=[conds_list]
+            ix=-1
+            cl = conds_list * len(x)
+            conds_list=[list(((ix:=ix+1), zl[1]) for zl in cll) for cll in cl]
+            self.inner_model2.conds_list = conds_list
+
+        # reverse conds here because comfyui reverses them later
+        if len(cc) != 1 and any(['smZid' in ic for ic in cond]):
+            cc = list(reversed(cc))
+            if 'cond' in kwargs: kwargs['cond'] = cc
+            else: args[2]=cc
+        if len(uu) != 1 and any(['smZid' in ic for ic in uncond]):
+            uu = list(reversed(uu))
+            if 'uncond' in kwargs: kwargs['uncond'] = uu
+            else: args[3]=uu
+        
         self.step += 1
+
+        if 'transformer_options' not in model_options:
+            model_options['transformer_options'] = {}
+
+        if self.use_CFGDenoiser is None:
+            self.use_CFGDenoiser = (any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in cc]) or 
+                                        any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in uu]))
 
         if (any([getp(p).get('from_smZ', False) for p in cc]) or 
             any([getp(p).get('from_smZ', False) for p in uu])):
-            if model_options.get('transformer_options',None) is None:
-                model_options['transformer_options'] = {}
             model_options['transformer_options']['from_smZ'] = True
+        
+        # cc[0]['model_conds']['c_crossattn'].cond = cc[0]['model_conds']['c_crossattn'].cond
+        # uu[0]['model_conds']['c_crossattn'].cond = uu[0]['model_conds']['c_crossattn'].cond
 
-        if not opts.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
-            if 'cond' in kwargs: kwargs['cond'] = cc
-            else: args[2]=cc
-            if 'uncond' in kwargs: kwargs['uncond'] = uu
-            else: args[3]=uu
+        if not self.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
+            kwargs['model_options'] = model_options
             out = super().apply_model(*args, **kwargs)
         else:
-            # Only supports one cond
-            for ix in range(len(cc)):
-                if getp(cc[ix]).get('from_smZ', False):
-                    cc = [cc[ix]]
-                    break
-            for ix in range(len(uu)):
-                if getp(uu[ix]).get('from_smZ', False):
-                    uu = [uu[ix]]
-                    break
-            c=getp(cc[0])
-            u=getp(uu[0])
-            _cc = cc[0][0] if type(cc[0]) is list else cc[0]['model_conds']['c_crossattn'].cond
-            _uu = uu[0][0] if type(uu[0]) is list else uu[0]['model_conds']['c_crossattn'].cond
-            conds_list = c.get('conds_list', [[(0, 1.0)]])
-            if 'model_conds' in c: c = c['model_conds']
-            if 'model_conds' in u: u = u['model_conds']
-            c_c_adm = get_adm(c)
-            if c_c_adm is not None:
-                u_c_adm = get_adm(u)
-                k = c_c_adm['key']
-                self.c_adm = {k: torch.cat([c_c_adm[k], u_c_adm[u_c_adm['key']]]).to(device=x.device), 'key': k}
-                # SDXL. Need to pad with repeats
-                _cc, _uu = expand(_cc, _uu)
-                _uu, _cc = expand(_uu, _cc)
-            x.c_adm = self.c_adm
-            image_cond = txt2img_image_conditioning(None, x)
-            out = self.inner_model2(x, timestep, cond=(conds_list, _cc), uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.s_min_uncond, image_cond=image_cond)
+            # to_comfy = opts.eta_noise_seed_delta == 0
+            to_comfy = True
+            if 'model_function_wrapper' in model_options:
+                model_options['model_function_wrapper_orig'] = model_options.pop('model_function_wrapper')
+            if to_comfy:
+                model_options["model_function_wrapper"] = self.inner_model2.forward_
+            else:
+                if 'sigmas' not in model_options['transformer_options']:
+                    model_options['transformer_options']['sigmas'] = timestep
+            self.inner_model2._cc = _cc = getp(cond[0]).get('orig_cond', None)
+            self.inner_model2._uu = _uu = getp(uncond[0]).get('orig_cond', None)
+            self.inner_model2.uncond_orig = uncond
+            self.inner_model2.x_in = x
+            self.inner_model2.sigma = timestep
+            self.inner_model2.cond_scale = cond_scale
+            self.inner_model2.image_cond = image_cond = None # txt2img_image_conditioning(None, x)
+            self.inner_model2.s_min_uncond = opts.s_min_uncond
+            self.inner_model2.model_options = kwargs['model_options'] = model_options
+            if not hasattr(self.inner_model2, 'skip_uncond'):
+                self.inner_model2.skip_uncond = math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False
+            if to_comfy:
+                out = sampling_function(self.inner_model, *args, **kwargs)
+            else:
+                out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
+
         return out
+
+
+def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_options={}, seed=None):
+        if math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False:
+            uncond_ = None
+        else:
+            uncond_ = uncond
+
+        cfg_result = None
+        try:
+            outt = comfy.samplers.calc_cond_uncond_batch(model, cond, uncond_, x, timestep, model_options)
+            if not hasattr(outt, 'uncond_pred'):
+                cond_pred, uncond_pred = outt
+        except ReturnEarly as e:
+            cfg_result = cond_pred = e.tensor
+            uncond_pred = cfg_result.uncond_pred
+        if "sampler_cfg_function" in model_options:
+            args = {"cond": x - cond_pred, "uncond": x - uncond_pred, "cond_scale": cond_scale, "timestep": timestep, "input": x, "sigma": timestep,
+                    "cond_denoised": cond_pred, "uncond_denoised": uncond_pred, "model": model, "model_options": model_options}
+            cfg_result = x - model_options["sampler_cfg_function"](args)
+        else:
+            if cfg_result is None:
+                cfg_result = uncond_pred + (cond_pred - uncond_pred) * cond_scale
+
+        for fn in model_options.get("sampler_post_cfg_function", []):
+            args = {"denoised": cfg_result, "cond": cond, "uncond": uncond, "model": model, "uncond_denoised": uncond_pred, "cond_denoised": cond_pred,
+                    "sigma": timestep, "model_options": model_options, "input": x}
+            cfg_result = fn(args)
+
+        return cfg_result
 
 def txt2img_image_conditioning(sd_model, x, width=None, height=None):
     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)

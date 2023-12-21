@@ -19,9 +19,6 @@ else:
 # [75, 'fantasy landscape with a lake and an oak in background masterful']
 # [100, 'fantasy landscape with a lake and a christmas tree in background masterful']
 
-round_bracket_multiplier = 1.1
-square_bracket_multiplier = 1.0 / 1.1
-ScheduledPromptConditioning = namedtuple("ScheduledPromptConditioning", ["end_at_step", "cond"])
 schedule_parser = lark.Lark(r"""
 !start: (prompt | /[][():]/+)*
 prompt: (emphasized | scheduled | alternate | plain | WHITESPACE)*
@@ -189,7 +186,6 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
 
     prompt_schedules = get_learned_conditioning_prompt_schedules(prompts, steps, hires_steps, use_old_scheduling)
     cache = {}
-    first_pooled = None
     for prompt, prompt_schedule in zip(prompts, prompt_schedules):
 
         cached = cache.get(prompt, None)
@@ -200,12 +196,10 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
         texts = SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
         # conds = model.get_learned_conditioning(texts)
         conds = model.forward(texts)
-        if first_pooled == None:
-            # first_pooled = conds.pooled
-            if conds.pooled.shape[0] > 1:
-                first_pooled = conds.pooled[1:2]
-            else:
-                first_pooled = conds.pooled[0:1]
+        if conds.pooled.shape[0] > 1:
+            first_pooled = conds.pooled[1:2]
+        else:
+            first_pooled = conds.pooled[0:1]
         cond_schedule = []
         for i, (end_at_step, _) in enumerate(prompt_schedule):
             if isinstance(conds, dict):

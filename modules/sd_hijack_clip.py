@@ -234,8 +234,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
             z = self.encode_with_transformers(tokens)
         except ValueError:
-            # This is where Comfy tokens were fed in that has textual inversion embeddings in the list
-            # i.e tensors in the list along with tokens
+            # This is where Comfy tokens that have textual inversion embeddings in the list are fed in.
+            # i.e. tensors in the list along with tokens.
             z = self.encode_with_transformers(remade_batch_tokens)
         pooled = getattr(z, 'pooled', None)
 

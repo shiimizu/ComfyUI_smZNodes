@@ -229,7 +229,7 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
         return tokenized
 
-emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?::(\d+\.?\d*|\d*\.\d+))?"
+emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?:(:)(\d+\.?\d*|\d*\.\d+))?"
 
 def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     '''
@@ -368,7 +368,7 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                 self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_sname), self)
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-    out = emb_re.sub(r"\2", text)
+    out = emb_re.sub(r"\2\5\6", text)
     return out
 
 def expand(tensor1, tensor2):

@@ -16,6 +16,7 @@ import comfy.utils
 from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from comfy.sample import np
 from comfy import model_management
 import comfy.samplers
 import inspect
@@ -550,7 +551,9 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     optional arg skip can be used to skip and discard x number of noise generations for a given seed
     """
     from .modules.shared import opts
-    from comfy.sample import np
+    if opts.randn_source == 'gpu':
+        device = model_management.get_torch_device()
+
     def get_generator(seed):
         nonlocal device
         nonlocal opts
@@ -653,7 +656,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         else:
             out = CLIPTextEncode().encode(clip, text)
         SDTokenizer.tokenize_with_weights = tokenize_with_weights_orig
-        return out
+        out = out[0] # destructure tutple
     else:
         texts = [text]
         create_prompts = lambda txts: prompt_parser.SdConditioning(txts)
@@ -984,7 +987,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         # cc[0]['model_conds']['c_crossattn'].cond = cc[0]['model_conds']['c_crossattn'].cond
         # uu[0]['model_conds']['c_crossattn'].cond = uu[0]['model_conds']['c_crossattn'].cond
 
-        if not self.use_CFGDenoiser or not model_options['transformer_options'].get('from_smZ', False):
+        if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options
             out = super().apply_model(*args, **kwargs)
         else:

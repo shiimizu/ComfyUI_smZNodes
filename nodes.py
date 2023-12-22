@@ -160,7 +160,6 @@ class smZ_Settings:
 
     def run(self, *args, **kwargs):
         from .modules.shared import opts as _opts
-        device = comfy.model_management.get_torch_device()
 
         clip = kwargs.pop('clip', None) if 'clip' in kwargs else args[0]
         kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
@@ -182,10 +181,7 @@ class smZ_Settings:
 
         if not hasattr(comfy.sample, 'prepare_noise_orig'):
             comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
-        if opts.randn_source == 'cpu':
-            device = torch.device("cpu")
-        _prepare_noise = partial(prepare_noise, device=device.type)
-        comfy.sample.prepare_noise = _prepare_noise
+        comfy.sample.prepare_noise = prepare_noise
         return (clip,)
 
 # A dictionary that contains all nodes you want to export with their names

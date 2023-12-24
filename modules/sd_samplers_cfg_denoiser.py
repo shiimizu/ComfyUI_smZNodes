@@ -276,8 +276,8 @@ class CFGDenoiser(torch.nn.Module):
             else:
                 x_in = self.input_x
                 sigma_in = self.timestep_
-            c_len = x_in.shape[0]
-            image_cond_in = x_in[[slice(None)] * c_len]
+            image_cond_in = x_in
+            # c_len = x_in.shape[0]
             # image_cond_in = torch.cat([image_cond]*c_len).to(device=x.device,dtype=x.dtype)[:c_len]
         else:
             x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x] + [x])

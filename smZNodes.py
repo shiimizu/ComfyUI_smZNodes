@@ -397,7 +397,11 @@ def expand(tensor1, tensor2):
 
 def reconstruct_schedules(schedules, step):
     fn = prompt_parser.reconstruct_multicond_batch if type(schedules).__name__ == "MulticondLearnedConditioning" else prompt_parser.reconstruct_cond_batch
-    return fn(schedules, step)
+    conds_list = [[(0, 1.0)]]
+    cond = fn(schedules, step)
+    if type(cond) is tuple:
+        conds_list, cond = cond
+    return (conds_list, cond)
 
 
 class ClipTokenWeightEncoder:
@@ -411,14 +415,8 @@ class ClipTokenWeightEncoder:
             if isinstance(token_weight_pairs, list) and isinstance(token_weight_pairs[0], str):
                 if multi:   schedules = prompt_parser.get_multicond_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
                 else:       schedules = prompt_parser.get_learned_conditioning(model_hijack.cond_stage_model, texts, steps, None, opts.use_old_scheduling)
-                cond = reconstruct_schedules(schedules, current_step)
-                if type(cond) is tuple:
-                    conds_list, cond = cond
-                pooled = cond.pooled.to(model_management.intermediate_device())
-                cond = cond.to(model_management.intermediate_device())
-                cond.pooled = pooled
-                cond.pooled.conds_list = conds_list
-                cond.pooled.schedules = schedules
+                conds_list, cond = reconstruct_schedules(schedules, current_step)
+                pooled = cond.pooled
             else:
                 # comfy++
                 def encode_toks(_token_weight_pairs):
@@ -429,19 +427,18 @@ class ClipTokenWeightEncoder:
                         multipliers = [x[1] for x in batch_chunk]
                         z = model_hijack.cond_stage_model.process_tokens([tokens], [multipliers])
                         if first_pooled == None:
-                            first_pooled = z.pooled.to(model_management.intermediate_device())
+                            first_pooled = z.pooled
                         zs.append(z)
-                    zcond = torch.hstack(zs).to(model_management.intermediate_device())
-                    zcond.pooled = first_pooled
-                    return zcond
+                    zcond = torch.hstack(zs)
+                    return (zcond, first_pooled)
                 # non-sdxl will be something like: {"l": [[]]}
                 if isinstance(token_weight_pairs, dict):
                     token_weight_pairs = next(iter(token_weight_pairs.values()))
-                cond = encode_toks(token_weight_pairs)
-                cond.pooled.conds_list = conds_list
+                cond, pooled = encode_toks(token_weight_pairs)
         finally:
                 model_hijack.undo_hijack(model_hijack.cond_stage_model)
-        return (cond, cond.pooled)
+        return (cond.to(model_management.intermediate_device()), 
+                {'pooled_output': pooled.to(model_management.intermediate_device()), 'schedules': schedules, 'conds_list': conds_list})
 
 class SD1ClipModel(ClipTokenWeightEncoder): ...
 
@@ -470,8 +467,8 @@ class SDXLClipModel(ClipTokenWeightEncoder):
             self.clip_g.cond_stage_model = None
             self.clip_l.cond_stage_model = None
 
-        if hasattr(g_pooled, 'schedules') and hasattr(l_pooled, 'schedules'):
-            g_pooled.schedules = {"g": g_pooled.schedules, "l": l_pooled.schedules}
+        if 'schedules' in g_pooled and 'schedules' in l_pooled:
+            g_pooled = {"g": g_pooled, "l": l_pooled}
 
         g_out, l_out = expand(g_out, l_out)
         l_out, g_out = expand(l_out, g_out)
@@ -486,8 +483,8 @@ class SDXLRefinerClipModel(ClipTokenWeightEncoder):
         token_weight_pairs_g = token_weight_pairs["g"]
         try: g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g, steps, current_step, multi)
         finally: self.clip_g.encode_token_weights = self.clip_g.encode_token_weights_orig
-        if hasattr(g_pooled, 'schedules'):
-            g_pooled.schedules = {"g": g_pooled.schedules}
+        # if hasattr(g_pooled, 'schedules'):
+        #     g_pooled.schedules = {"g": g_pooled.schedules}
         return (g_out, g_pooled)
 
 def is_prompt_editing(schedules):
@@ -496,6 +493,8 @@ def is_prompt_editing(schedules):
         schedules = {'g': schedules}
     ret = False
     for k,v in schedules.items():
+        if type(v) is dict and 'schedules' in v:
+            v=v['schedules']
         if type(v) == list:
             for vb in v:
                 if len(vb) != 1: ret = True
@@ -702,75 +701,54 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         if opts.debug:
             print('[smZNodes] using steps', steps)
         gen_id = lambda : binascii.hexlify(os.urandom(1024))[64:72]
-        id=gen_id()
-        schedules = getattr(pooled, 'schedules', [[(0, 1.0)]])
-        conds_list=pooled.conds_list
-        pooled = {"pooled_output": pooled, "from_smZ": True, "smZid": id, "conds_list": conds_list, **sdxl_params}
-        out = [[cond, pooled]]
-        if is_prompt_editing(schedules):
-            conds=[]
-            for x in range(0,steps):
-                if type(schedules) is not dict:
-                    cond=reconstruct_schedules(schedules, x)
-                    if type(cond) is tuple:
-                        conds_list, cond = cond
-                        pooled['conds_list'] = conds_list
-                    cond=cond
-                elif type(schedules) is dict and len(schedules) == 1: # SDXLRefiner
-                    cond = reconstruct_schedules(next(iter(schedules.values())), x)
-                    if type(cond) is tuple:
-                        conds_list, cond = cond
-                        pooled['conds_list'] = conds_list
-                    cond=cond
-                elif type(schedules) is dict:
-                    g_out = reconstruct_schedules(schedules['g'], x)
-                    if type(g_out) is tuple: _, g_out = g_out
-                    l_out = reconstruct_schedules(schedules['l'], x)
-                    if type(l_out) is tuple: _, l_out = l_out
-                    g_out, l_out = expand(g_out, l_out)
-                    l_out, g_out = expand(l_out, g_out)
-                    cond = torch.cat([l_out, g_out], dim=-1)
-                else:
-                    raise NotImplementedError
+        schedules = pooled['schedules'] if 'schedules' in pooled else pooled
+        out=[]
+        _is_prompt_editing = is_prompt_editing(schedules)
+        if not _is_prompt_editing:
+            steps = 1
+        conds=[]
+        pooled_outputs = []
+        for x in range(0,steps):
+            if 'schedules' in pooled:
+                conds_list, cond = reconstruct_schedules(schedules, x)
+            else:
+                conds_list, g_out = reconstruct_schedules(schedules['g']['schedules'], x)
+                _conds_list, l_out = reconstruct_schedules(schedules['l']['schedules'], x)
+                g_out, l_out = expand(g_out, l_out)
+                l_out, g_out = expand(l_out, g_out)
+                cond = torch.cat([l_out, g_out], dim=-1)
+                cond.pooled = g_out.pooled
 
-                if conds == []:
-                    conds=[[] for _ in range(len(cond))]
+            if conds == []:
+                conds=[[] for _ in range(cond.shape[0])]
+                pooled_outputs=[[] for _ in range(cond.shape[0])]
 
-                for ix, icond in enumerate(cond.chunk(len(cond))):
-                    conds[ix] += [icond]
+            for ix, icond in enumerate(cond.chunk(cond.shape[0])):
+                conds[ix].append(icond)
+            for ix, ipo in enumerate(cond.pooled.chunk(cond.pooled.shape[0])):
+                pooled_outputs[ix].append(ipo)
 
-            # conds.reverse()
-            # if all the same, only take the first cond
-            for ix in range(len(conds)):
-                if all((conds[ix][0] == icond).all().item() for icond in conds[ix]):
-                    conds[ix] = [conds[ix][0]]
+        # conds.reverse()
+        # if all the same, only take the first cond
+        for ix in range(len(conds)):
+            if all((conds[ix][0] == icond).all().item() for icond in conds[ix]):
+                conds[ix] = [conds[ix][0]]
+            # for ix in range(len(pooled_outputs)):
+            if all((pooled_outputs[ix][0] == ipooled).all().item() for ipooled in pooled_outputs[ix]):
+                pooled_outputs[ix] = [pooled_outputs[ix][0]]
 
-            out=[]
-            for ix, icl in enumerate(conds):
-                id = gen_id()
-                current_conds_list=[[copy.deepcopy(conds_list[0][ix])]]
-                for icond in icl:
-                    pooled = pooled.copy()
-                    pooled['smZid'] = id
-                    pooled['conds_list'] = current_conds_list
-                    out.append([icond.to(model_management.intermediate_device()), pooled])
-                
-        out[0][1]['orig_len'] = len(out)
-        out[0][1]['orig_cond'] = out[0][0]
-
-        if multi_conditioning and len(conds_list[0]) > 1 and not is_prompt_editing(schedules):
+        out=[]
+        if multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
             if clip_clone.patcher.model_options.get('smZ_opts', None) is None:
                 opts.use_CFGDenoiser = True
-
-            _out = out
-            out = []
-            for ix, zx in enumerate(_out[0][0].chunk(len(_out[0][0]))):
-                o = copy.deepcopy(_out[0])
-                o[1]['smZid'] = gen_id()
-                o[1]['conds_list'] = [[copy.deepcopy(conds_list[0][ix])]]
-                o[0] = zx
-                out.append(o)
-            # if len(out) > 1: out.reverse()
+        for ix, icl in enumerate(conds):
+            id = gen_id()
+            current_conds_list=[[copy.deepcopy(conds_list[0][ix])]]
+            for ixx, icond in enumerate(icl):
+                _pooled = {"pooled_output": pooled_outputs[ix][ixx], "from_smZ": True, "smZid": id, "conds_list": current_conds_list, **sdxl_params}
+                out.append([icond, _pooled])
+        out[0][1]['orig_len'] = len(out)
+        out[0][1]['orig_cond'] = out[0][0]
     
     out[0][1]['opts'] = copy.deepcopy(opts)
 

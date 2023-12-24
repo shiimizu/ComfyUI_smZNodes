@@ -67,6 +67,8 @@ class CFGDenoiser(torch.nn.Module):
     #     raise NotImplementedError()
 
     def combine_denoised(self, x_out, conds_list, uncond, cond_scale, x, from_comfy = False):
+        cond_scale /= len(conds_list[0])
+
         if "sampler_cfg_function" in self.model_options:
             cond_scale = 1.0
 
@@ -126,24 +128,22 @@ class CFGDenoiser(torch.nn.Module):
         output = output_.chunk(batch_chunks)
 
         # list of lists, the amount of latents, e.g.: [[], []]
-        conds=[[] for _ in range(len(output[0]))]
-        unconds=[[] for _ in range(len(output[0]))]
+        conds=[[] for _ in range(output[0].shape[0])]
+        unconds=[[] for _ in range(output[0].shape[0])]
 
         for o in range(batch_chunks):
             if cond_or_uncond[o] == COND:
-                for ix, latent in enumerate(output[o].chunk(len(output[o]))):
+                for ix, latent in enumerate(output[o].chunk(output[o].shape[0])):
                     conds[ix] += [latent]
             else:
-                for ix, latent in enumerate(output[o].chunk(len(output[o]))):
+                for ix, latent in enumerate(output[o].chunk(output[o].shape[0])):
                     unconds[ix] += [latent]
 
         # permute
-        conds=x_out=torch.cat([item for row in conds for item in row]).to(device=x.device,dtype=x.dtype)
-        if not skip_uncond:
-            unconds=torch.cat([item for row in unconds for item in row]).to(device=x.device,dtype=x.dtype)
-            x_out=torch.cat([conds,unconds]).to(device=x.device,dtype=x.dtype)
-        # else:
-            # x_out=torch.cat([x_out, uncond])
+        x_conds = [item for row in conds for item in row]
+        x_unconds = [] if skip_uncond else [item for row in unconds for item in row]
+        x_conds.extend(x_unconds)
+        x_out=torch.cat(x_conds).to(device=x.device,dtype=x.dtype)
         return x_out
 
     def forward_(self, model, args):
@@ -159,7 +159,7 @@ class CFGDenoiser(torch.nn.Module):
         self.input_x = args["input"]
         self.timestep_ = args["timestep"]
         self.c_crossattn = c_crossattn = c['c_crossattn']
-        cond_or_uncond = args["cond_or_uncond"]
+        self.cond_or_uncond = args["cond_or_uncond"]
         
         s_min_uncond = self.s_min_uncond
         cond_scale = self.cond_scale
@@ -174,8 +174,12 @@ class CFGDenoiser(torch.nn.Module):
         cond = torch.cat([torch.stack(chunk) for chunk in zip(*c_chunks)])
         uncond = None
         if not getattr(self, 'skip_uncond', False):
-            u_chunks = c_crossattn[:-split_point].chunk(x.shape[0])
-            uncond = torch.cat([torch.stack(chunk) for chunk in zip(*u_chunks)])
+            csp = c_crossattn[:-split_point]
+            if csp.shape[0] == 0:
+                uncond = c_crossattn
+            else:
+                u_chunks = csp.chunk(x.shape[0])
+                uncond = torch.cat([torch.stack(chunk) for chunk in zip(*u_chunks)])
 
         out = self.forward(x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond, c)
         out.conds_list = self.conds_list
@@ -205,8 +209,8 @@ class CFGDenoiser(torch.nn.Module):
         if self.mask_before_denoising and self.mask is not None:
             x = self.init_latent * self.mask + self.nmask * x
 
-        batch_size = len(conds_list)
-        repeats = [len(conds_list[i]) for i in range(batch_size)]
+        batch_size = x.shape[0]
+        repeats = [tensor.shape[0] for _ in range(batch_size)] if hasattr(self, 'cond_or_uncond') else [len(conds_list[i]) for i in range(batch_size)]
 
         # if shared.sd_model.model.conditioning_key == "crossattn-adm":
         #     image_uncond = torch.zeros_like(image_cond)
@@ -263,7 +267,7 @@ class CFGDenoiser(torch.nn.Module):
                 x_in=torch.cat(x_conds).to(device=x.device,dtype=x.dtype)
                 # conds.extend(unconds)
                 # cond_in=torch.cat(conds).to(device=x.device,dtype=x.dtype)
-                c_len = len(x_in)
+                c_len = x_in.shape[0]
                 sigma_in=sigma.repeat(c_len)[:c_len]
                 
                 # x_in = torch.cat([torch.stack([x[i] for _ in range(n)]) for i, n in enumerate(repeats)] + [x])
@@ -272,7 +276,7 @@ class CFGDenoiser(torch.nn.Module):
             else:
                 x_in = self.input_x
                 sigma_in = self.timestep_
-            c_len = len(x_in)
+            c_len = x_in.shape[0]
             image_cond_in = x_in[[slice(None)] * c_len]
             # image_cond_in = torch.cat([image_cond]*c_len).to(device=x.device,dtype=x.dtype)[:c_len]
         else:

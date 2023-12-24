@@ -195,6 +195,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             chunk_count = max([len(x) for x in batch_chunks])
 
         zs = []
+        zp = []
         for i in range(chunk_count):
             batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
             tokens = [x.tokens for x in batch_chunk]
@@ -205,13 +206,15 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                     used_embeddings[embedding.name] = embedding
             z = self.process_tokens(tokens, multipliers)
             zs.append(z)
+            zp.append(z.pooled)
         if len(used_embeddings) > 0:
             embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
             self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
         zst = torch.hstack(zs)
-        zst.pooled = zs[0].pooled
+        zstp = torch.hstack(zp)
+        zst.pooled = zstp
         if getattr(self.wrapped, 'return_pooled', False):
-            return (zst, zst.pooled)
+            return (zst, zstp)
         else:
             return zst
 
@@ -237,7 +240,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             # This is where Comfy tokens that have textual inversion embeddings in the list are fed in.
             # i.e. tensors in the list along with tokens.
             z = self.encode_with_transformers(remade_batch_tokens)
-        pooled = getattr(z, 'pooled', None)
+        pooled = z.pooled
 
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
@@ -248,8 +251,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             z = z * (original_mean / new_mean)
         else:
             z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
-        if pooled is not None:
-            z.pooled = pooled
+        z.pooled = pooled
         return z
 
 

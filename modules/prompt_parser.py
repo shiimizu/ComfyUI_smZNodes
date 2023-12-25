@@ -202,12 +202,7 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
                 cond = {k: v[i] for k, v in conds.items()}
             else:
                 cond = conds[i]
-                _pooled = conds.pooled[i].unsqueeze(0)
-                if _pooled.shape[0] > 1:
-                    first_pooled = _pooled[1:2]
-                else:
-                    first_pooled = _pooled[0:1]
-                cond.pooled = first_pooled
+                cond.pooled = conds.pooled[i].unsqueeze(0)[0:1]
             cond_schedule.append(ScheduledPromptConditioning(end_at_step, cond))
 
         cache[prompt] = cond_schedule
@@ -315,8 +310,7 @@ def reconstruct_cond_batch(c: List[List[ScheduledPromptConditioning]], current_s
                 res[k][i] = param
         else:
             res[i] = cond_schedule[target_index].cond
-            pooled_outputs.append(cond_schedule[target_index].cond.pooled.clone())
-
+            pooled_outputs.append(cond_schedule[target_index].cond.pooled)
     res.pooled = torch.cat(pooled_outputs).to(device=param.device, dtype=param.dtype)
     return res
 
@@ -339,6 +333,7 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
     param = c.batch[0][0].schedules[0].cond
 
     tensors = []
+    pooled_outputs = []
     conds_list = []
 
     for composable_prompts in c.batch:
@@ -353,6 +348,7 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
 
             conds_for_batch.append((len(tensors), composable_prompt.weight))
             tensors.append(composable_prompt.schedules[target_index].cond)
+            pooled_outputs.append(composable_prompt.schedules[target_index].cond.pooled)
 
         conds_list.append(conds_for_batch)
 
@@ -362,8 +358,7 @@ def reconstruct_multicond_batch(c: MulticondLearnedConditioning, current_step):
         stacked = DictWithShape(stacked, stacked['crossattn'].shape)
     else:
         stacked = stack_conds(tensors).to(device=param.device, dtype=param.dtype)
-
-    stacked.pooled = torch.cat([tensor.pooled.clone() for tensor in tensors]).to(device=param.device, dtype=param.dtype)
+        stacked.pooled = torch.cat(pooled_outputs).to(device=param.device, dtype=param.dtype)
     return conds_list, stacked
 
 

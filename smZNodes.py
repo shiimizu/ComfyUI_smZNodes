@@ -611,10 +611,6 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
     is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
-    if is_sdxl:
-        # Prevents tensor shape mismatch
-        # This is what comfy does by default
-        opts.batch_cond_uncond = True
         
     parser_map = {
         "full": "Full parser",

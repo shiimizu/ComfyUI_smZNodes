@@ -95,11 +95,7 @@ class CFGDenoiser(torch.nn.Module):
                     denoised[i] += (x_out[cond_index] - denoised_uncond[i]) * (weight * cond_scale)
         
         denoised.uncond_pred = denoised_uncond
-        if from_comfy:
-            del x_out
-            raise ReturnEarly(denoised)
-        else:
-            return denoised
+        return denoised
 
     def combine_denoised_for_edit_model(self, x_out, cond_scale):
         out_cond, out_img_cond, out_uncond = x_out.chunk(3)
@@ -331,12 +327,14 @@ class CFGDenoiser(torch.nn.Module):
                         x_out = self.comfyui_x_out_to_a1111(self.inner_model(self.input_x, self.timestep_, **c), x, c, skip_uncond)
             else:
                 x_out = torch.zeros_like(x_in)
+                if 'y' in c: y = c['y']
                 for batch_offset in range(0, x_out.shape[0], batch_size):
                     a = batch_offset
                     b = a + batch_size
                     if 'model_function_wrapper' in model_options:
                         x_out[a:b] = model_options['model_function_wrapper'](self.inner_model, {"input": x_in[a:b], "timestep": sigma_in[a:b], "c": make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]), "cond_or_uncond": c['transformer_options']['cond_or_uncond']})
                     else:
+                        if 'y' in c: c['y'] = y[a:b]
                         x_out[a:b] = self.inner_model(x_in[a:b], sigma_in[a:b], **make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]))
                 if not a1111:
                     x_out = self.comfyui_x_out_to_a1111(x_out, x, c, skip_uncond)
@@ -366,7 +364,6 @@ class CFGDenoiser(torch.nn.Module):
         # cfg_denoised_callback(denoised_params)
 
         devices.test_for_nans(x_out, "unet")
-        self.step += 1
 
         if is_edit_model:
             denoised = self.combine_denoised_for_edit_model(x_out, cond_scale)
@@ -393,5 +390,9 @@ class CFGDenoiser(torch.nn.Module):
         # cfg_after_cfg_callback(after_cfg_callback_params)
         # denoised = after_cfg_callback_params.x
 
+        self.step += 1
         del x_out
-        return denoised
+        if not a1111:
+            raise ReturnEarly(denoised)
+        else:
+            return denoised

@@ -734,7 +734,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 pooled_outputs[ix] = [pooled_outputs[ix][0]]
 
         out=[]
-        if multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
+        if False: # multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
             if clip_clone.patcher.model_options.get('smZ_opts', None) is None:
                 opts.use_CFGDenoiser = True
         for ix, icl in enumerate(conds):

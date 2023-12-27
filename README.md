@@ -5,36 +5,6 @@ A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/Comf
 1. [CLIP Text Encode++](#clip-text-encode)
 2. [Settings](#settings)
 
-## CLIP Text Encode++
-
-<p align="center">
-    <div class="row">
-        <p align="center">
-            <img width="1255" alt="Clip Text Encode++ – Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/ec85fd20-2b83-43cd-9f19-5aba34034e2a">
-    </div>
-</p>
-
-
-
-
-
-CLIP Text Encode++ can generate identical embeddings from [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
-
-
-This means you can reproduce the same images generated from `stable-diffusion-webui` on `ComfyUI`.
-
-Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser with the Settings node.
-
-
-### Features
-
-- [Prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
-    - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
-- [`AND`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#composable-diffusion) keyword (Composable Diffusion)
-- [`BREAK`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#break-keyword) keyword (same as ConditioningConcat node)
-- Weight normalization
-- Optional `embedding:` identifier
-
 ### Installation
 
 Three methods are available for installation:
@@ -78,6 +48,32 @@ cd path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes
 git pull
 ```
 
+
+## CLIP Text Encode++
+
+<p align="center">
+    <div class="row">
+        <p align="center">
+            <img width="1255" alt="Clip Text Encode++ – Default settings on stable-diffusion-webui" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/ec85fd20-2b83-43cd-9f19-5aba34034e2a">
+    </div>
+</p>
+
+CLIP Text Encode++ can generate identical embeddings from [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for [ComfyUI](https://github.com/comfyanonymous/ComfyUI).
+
+This means you can reproduce the same images generated from `stable-diffusion-webui` on `ComfyUI`.
+
+Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser with the Settings node.
+
+### Features
+
+- [Prompt editing](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#prompt-editing)
+    - [Alternating words](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#alternating-words)
+- [`AND`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#composable-diffusion) keyword (similar to the ConditioningCombine node)
+- [`BREAK`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#break-keyword) keyword (same as the ConditioningConcat node)
+- Weight normalization
+- Optional `embedding:` identifier
+
+
 ### Comparisons
 These images can be dragged into ComfyUI to load their workflows. Each image is done using the [Silicon29](https://huggingface.co/Xynon/SD-Silicon) (in SD v1.5) checkpoint with 18 steps using the Heun sampler.
 
@@ -94,9 +90,9 @@ Image slider links:
 
 |Name|Description|
 | --- | --- |
-| `parser` | The parser selected to parse prompts into tokens and then transformed (encoded) into embeddings. Taken from [SD.Next](https://github.com/vladmandic/automatic/discussions/99#discussioncomment-5931014). |
-| `mean_normalization` | Whether to take the mean of your prompt weights. It's `true` by default on `stable-diffusion-webui`.<br>This is implemented according to `stable-diffusion-webui`. (They say that it's probably not the correct way to take the mean.) |
-| `multi_conditioning` | <blockquote> For each prompt, the list is obtained by splitting the prompt using the `AND` separator. <br>See: [Compositional Visual Generation with Composable Diffusion Models](https://energy-based-model.github.io/Compositional-Visual-Generation-with-Composable-Diffusion-Models/) </blockquote> <ul><li>a way to use multiple prompts at once</li><li>allows `AND` in the negative prompt as well</li><li>supports weights for prompts: `a cat :1.2 AND a dog AND a penguin :2.2`. The weights default to 1</li><li>each prompt gets a cfg value of `cfg * weight / number of prompts`. In `stable-diffusion-webui`, each prompt gets a cfg value of `cfg * weight`. </li></ul>This uses CFGDenoiser internally, so if it's disabled in the `Settings` node, the prompts will act like it came from the ConditioningCombine node and go through the default behaviour in ComfyUI. |
+| `parser` | The parser to parse prompts into tokens and then transformed (encoded) into embeddings. Taken from [SD.Next](https://github.com/vladmandic/automatic/discussions/99#discussioncomment-5931014). |
+| `mean_normalization` | Whether to take the mean of your prompt weights. It's `true` by default on `stable-diffusion-webui`.<br>This is implemented according to how it is in `stable-diffusion-webui`. |
+| `multi_conditioning` | <blockquote> For each prompt, the list is obtained by splitting the prompt using the `AND` separator. <br>See: [Compositional Visual Generation with Composable Diffusion Models](https://energy-based-model.github.io/Compositional-Visual-Generation-with-Composable-Diffusion-Models/) </blockquote> <ul><li>a way to use multiple prompts at once</li><li>allows `AND` in the negative prompt as well</li><li>supports weights for prompts: `a cat :1.2 AND a dog AND a penguin :2.2`. The weights default to 1</li><li>each prompt gets a cfg value of `cfg * weight / N`, where `N` is the number of positive prompts. In `stable-diffusion-webui`, each prompt gets a cfg value of `cfg * weight`. To match their behaviour, you can add a weight of `:N` to every prompt _or_ simply set a cfg value of `cfg * N`</li></ul>This uses `CFGDenoiser` internally, so if it's disabled in the `Settings` node, the prompts will act like it came from the ConditioningCombine node and go through the default behaviour in ComfyUI. |
 |`use_old_emphasis_implementation`| <blockquote>Use old emphasis implementation. Can be useful to reproduce old seeds.</blockquote>|
 
 > [!TIP]  

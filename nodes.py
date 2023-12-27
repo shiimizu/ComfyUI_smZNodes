@@ -137,7 +137,7 @@ class smZ_Settings:
 
                     "ㅤ"*4: ("STRING", {"multiline": False, "default": "Optimizations"}),
                     "info_NGMS": ("STRING", {"multiline": True, "default": "Negative Guidance minimum sigma\nskip negative prompt for some steps when the image is almost ready; 0=disable, higher=faster. Only for CFGDenoiser.\nsee https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/9177"}),
-                    "NGMS": ("FLOAT", {"default": opts.s_min_uncond, "min": 0.0, "max": 4.0, "step": 0.01}),
+                    "NGMS": ("FLOAT", {"default": opts.s_min_uncond, "min": 0.0, "max": 15.0, "step": 0.01}),
                     "info_pad_cond_uncond": ("STRING", {"multiline": True, "default": "Pad prompt/negative prompt to be same length\nimproves performance when prompt and negative prompt have different lengths; changes seeds. Only for CFGDenoiser."}),
                     "pad_cond_uncond": (BOOLEAN, {"default": opts.pad_cond_uncond}),
                     "info_batch_cond_uncond": ("STRING", {"multiline": True, "default": "Batch cond/uncond\ndo both conditional and unconditional denoising in one batch; uses a bit more VRAM during sampling, but improves speed – enabled on SDXL models. Only for CFGDenoiser."}),

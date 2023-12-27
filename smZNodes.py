@@ -734,7 +734,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 pooled_outputs[ix] = [pooled_outputs[ix][0]]
 
         out=[]
-        if False: # multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
+        if multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
             if clip_clone.patcher.model_options.get('smZ_opts', None) is None:
                 opts.use_CFGDenoiser = True
         for ix, icl in enumerate(conds):
@@ -744,7 +744,6 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 _pooled = {"pooled_output": pooled_outputs[ix][ixx], "from_smZ": True, "smZid": id, "conds_list": current_conds_list, **sdxl_params}
                 out.append([icond, _pooled])
         out[0][1]['orig_len'] = len(out)
-        out[0][1]['orig_cond'] = out[0][0]
     
     out[0][1]['opts'] = copy.deepcopy(opts)
 
@@ -876,7 +875,6 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
     def __init__(self, model):
         super().__init__(model)
         self.step = 0
-        self.inner_model0 = model
         self.inner_model2 = CFGDenoiser(self.inner_model.apply_model)
         self.c_adm = None
         self.init_cond = None
@@ -935,6 +933,17 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             conds_list=[list(((ix:=ix+1), zl[1]) for zl in cll) for cll in cl]
             self.inner_model2.conds_list = conds_list
 
+
+        if self.use_CFGDenoiser is None:
+            self.use_CFGDenoiser = (any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in cc]) or 
+                                        any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in uu]))
+
+        # to_comfy = not opts.debug
+        to_comfy = True
+        if self.use_CFGDenoiser and not to_comfy:
+            _cc = torch.cat([c['model_conds']['c_crossattn'].cond for c in cc])
+            _uu = torch.cat([c['model_conds']['c_crossattn'].cond for c in uu])
+
         # reverse conds here because comfyui reverses them later
         if len(cc) != 1 and any(['smZid' in ic for ic in cond]):
             cc = list(reversed(cc))
@@ -944,29 +953,18 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             uu = list(reversed(uu))
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else: args[3]=uu
-        
-        self.step += 1
 
         if 'transformer_options' not in model_options:
             model_options['transformer_options'] = {}
-
-        if self.use_CFGDenoiser is None:
-            self.use_CFGDenoiser = (any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in cc]) or 
-                                        any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in uu]))
 
         if (any([getp(p).get('from_smZ', False) for p in cc]) or 
             any([getp(p).get('from_smZ', False) for p in uu])):
             model_options['transformer_options']['from_smZ'] = True
         
-        # cc[0]['model_conds']['c_crossattn'].cond = cc[0]['model_conds']['c_crossattn'].cond
-        # uu[0]['model_conds']['c_crossattn'].cond = uu[0]['model_conds']['c_crossattn'].cond
-
         if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options
             out = super().apply_model(*args, **kwargs)
         else:
-            # to_comfy = opts.eta_noise_seed_delta == 0
-            to_comfy = True
             if 'model_function_wrapper' in model_options:
                 model_options['model_function_wrapper_orig'] = model_options.pop('model_function_wrapper')
             if to_comfy:
@@ -974,22 +972,21 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             else:
                 if 'sigmas' not in model_options['transformer_options']:
                     model_options['transformer_options']['sigmas'] = timestep
-            self.inner_model2._cc = _cc = getp(cond[0]).get('orig_cond', None)
-            self.inner_model2._uu = _uu = getp(uncond[0]).get('orig_cond', None)
-            self.inner_model2.uncond_orig = uncond
             self.inner_model2.x_in = x
             self.inner_model2.sigma = timestep
             self.inner_model2.cond_scale = cond_scale
-            self.inner_model2.image_cond = image_cond = None # txt2img_image_conditioning(None, x)
+            self.inner_model2.image_cond = image_cond = None
             self.inner_model2.s_min_uncond = opts.s_min_uncond
             self.inner_model2.model_options = kwargs['model_options'] = model_options
+            if 'x' in kwargs: kwargs['x'].conds_list = self.inner_model2.conds_list
+            else: args[0].conds_list = self.inner_model2.conds_list
             if not hasattr(self.inner_model2, 'skip_uncond'):
                 self.inner_model2.skip_uncond = math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False
             if to_comfy:
                 out = sampling_function(self.inner_model, *args, **kwargs)
             else:
                 out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
-
+        self.step += 1
         return out
 
 
@@ -1000,13 +997,9 @@ def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_option
             uncond_ = uncond
 
         cfg_result = None
-        try:
-            outt = comfy.samplers.calc_cond_uncond_batch(model, cond, uncond_, x, timestep, model_options)
-            if not hasattr(outt, 'uncond_pred'):
-                cond_pred, uncond_pred = outt
-        except ReturnEarly as e:
-            cfg_result = cond_pred = e.tensor
-            uncond_pred = cfg_result.uncond_pred
+        cond_pred, uncond_pred = calc_cond_uncond_batch(model, cond, uncond_, x, timestep, model_options, cond_scale)
+        if hasattr(x, 'conds_list'): cfg_result = cond_pred
+
         if "sampler_cfg_function" in model_options:
             args = {"cond": x - cond_pred, "uncond": x - uncond_pred, "cond_scale": cond_scale, "timestep": timestep, "input": x, "sigma": timestep,
                     "cond_denoised": cond_pred, "uncond_denoised": uncond_pred, "model": model, "model_options": model_options}
@@ -1022,23 +1015,136 @@ def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_option
 
         return cfg_result
 
-def txt2img_image_conditioning(sd_model, x, width=None, height=None):
-    return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
-    # if sd_model.model.conditioning_key in {'hybrid', 'concat'}: # Inpainting models
-    #     # The "masked-image" in this case will just be all zeros since the entire image is masked.
-    #     image_conditioning = torch.zeros(x.shape[0], 3, height, width, device=x.device)
-    #     image_conditioning = sd_model.get_first_stage_encoding(sd_model.encode_first_stage(image_conditioning))
-    #     # Add the fake full 1s mask to the first dimension.
-    #     image_conditioning = torch.nn.functional.pad(image_conditioning, (0, 0, 0, 0, 1, 0), value=1.0)
-    #     image_conditioning = image_conditioning.to(x.dtype)
-    #     return image_conditioning
-    # elif sd_model.model.conditioning_key == "crossattn-adm": # UnCLIP models
-    #     return x.new_zeros(x.shape[0], 2*sd_model.noise_augmentor.time_embed.dim, dtype=x.dtype, device=x.device)
-    # else:
-    #     # Dummy zero conditioning if we're not using inpainting or unclip models.
-    #     # Still takes up a bit of memory, but no encoder call.
-    #     # Pretty sure we can just make this a 1x1 image since its not going to be used besides its batch size.
-    #     return x.new_zeros(x.shape[0], 5, 1, 1, dtype=x.dtype, device=x.device)
+from comfy.samplers import get_area_and_mult, can_concat_cond, cond_cat
+def calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options, cond_scale_in):
+    conds = []
+    a1111 = hasattr(x_in, 'conds_list')
+
+    out_cond = torch.zeros_like(x_in)
+    out_count = torch.ones_like(x_in) * 1e-37
+
+    out_uncond = torch.zeros_like(x_in)
+    out_uncond_count = torch.ones_like(x_in) * 1e-37
+
+    COND = 0
+    UNCOND = 1
+
+    to_run = []
+    for x in cond:
+        p = get_area_and_mult(x, x_in, timestep)
+        if p is None:
+            continue
+
+        to_run += [(p, COND)]
+    if uncond is not None:
+        for x in uncond:
+            p = get_area_and_mult(x, x_in, timestep)
+            if p is None:
+                continue
+
+            to_run += [(p, UNCOND)]
+
+    while len(to_run) > 0:
+        first = to_run[0]
+        first_shape = first[0][0].shape
+        to_batch_temp = []
+        for x in range(len(to_run)):
+            if can_concat_cond(to_run[x][0], first[0]):
+                to_batch_temp += [x]
+
+        to_batch_temp.reverse()
+        to_batch = to_batch_temp[:1]
+
+        free_memory = model_management.get_free_memory(x_in.device)
+        for i in range(1, len(to_batch_temp) + 1):
+            batch_amount = to_batch_temp[:len(to_batch_temp)//i]
+            input_shape = [len(batch_amount) * first_shape[0]] + list(first_shape)[1:]
+            if model.memory_required(input_shape) < free_memory:
+                to_batch = batch_amount
+                break
+
+        input_x = []
+        mult = []
+        c = []
+        cond_or_uncond = []
+        area = []
+        control = None
+        patches = None
+        for x in to_batch:
+            o = to_run.pop(x)
+            p = o[0]
+            input_x.append(p.input_x)
+            mult.append(p.mult)
+            c.append(p.conditioning)
+            area.append(p.area)
+            cond_or_uncond.append(o[1])
+            control = p.control
+            patches = p.patches
+
+        batch_chunks = len(cond_or_uncond)
+        input_x = torch.cat(input_x)
+        c = cond_cat(c)
+        timestep_ = torch.cat([timestep] * batch_chunks)
+
+        if control is not None:
+            c['control'] = control.get_control(input_x, timestep_, c, len(cond_or_uncond))
+
+        transformer_options = {}
+        if 'transformer_options' in model_options:
+            transformer_options = model_options['transformer_options'].copy()
+
+        if patches is not None:
+            if "patches" in transformer_options:
+                cur_patches = transformer_options["patches"].copy()
+                for p in patches:
+                    if p in cur_patches:
+                        cur_patches[p] = cur_patches[p] + patches[p]
+                    else:
+                        cur_patches[p] = patches[p]
+            else:
+                transformer_options["patches"] = patches
+
+        transformer_options["cond_or_uncond"] = cond_or_uncond[:]
+        transformer_options["sigmas"] = timestep
+
+        c['transformer_options'] = transformer_options
+
+        if 'model_function_wrapper' in model_options:
+            output = model_options['model_function_wrapper'](model.apply_model, {"input": input_x, "timestep": timestep_, "c": c, "cond_or_uncond": cond_or_uncond}).chunk(batch_chunks)
+        else:
+            output = model.apply_model(input_x, timestep_, **c).chunk(batch_chunks)
+        del input_x
+
+        for o in range(batch_chunks):
+            if cond_or_uncond[o] == COND:
+                if a1111:
+                    out_cond_ = torch.zeros_like(x_in)
+                    out_cond_[:,:,area[o][2]:area[o][0] + area[o][2],area[o][3]:area[o][1] + area[o][3]] += output[o] * mult[o]
+                    conds.append(out_cond_)
+                else:
+                    out_cond[:,:,area[o][2]:area[o][0] + area[o][2],area[o][3]:area[o][1] + area[o][3]] += output[o] * mult[o]
+                out_count[:,:,area[o][2]:area[o][0] + area[o][2],area[o][3]:area[o][1] + area[o][3]] += mult[o]
+            else:
+                out_uncond[:,:,area[o][2]:area[o][0] + area[o][2],area[o][3]:area[o][1] + area[o][3]] += output[o] * mult[o]
+                out_uncond_count[:,:,area[o][2]:area[o][0] + area[o][2],area[o][3]:area[o][1] + area[o][3]] += mult[o]
+        del mult
+    if not a1111:
+        out_cond /= out_count
+    out_uncond /= out_uncond_count
+    del out_uncond_count
+    if a1111:
+        conds_len = len(conds)
+        if conds_len != 0:
+            lenc = max(conds_len,1.0)
+            cond_scale = 1.0/lenc * (1.0 if "sampler_cfg_function" in model_options else cond_scale_in)
+            conds_list = x_in.conds_list
+            ucls = [out_uncond]
+            if (inner_conds_list_len:=len(conds_list[0])) < conds_len:
+                conds_list = [[(ix, 1.0 if ix > inner_conds_list_len-1 else conds_list[0][ix][1]) for ix in range(conds_len)]]
+            ucls.extend([(cc / (out_count / lenc) - out_uncond) * weight * cond_scale for cc, (_, weight) in zip(conds, conds_list[0])])
+            out_cond = torch.stack(ucls).sum(0)
+    del out_count
+    return out_cond, out_uncond
 
 # =======================================================================================
 

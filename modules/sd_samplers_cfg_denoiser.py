@@ -117,7 +117,7 @@ class CFGDenoiser(torch.nn.Module):
         # ComfyUI: alternating between latents. single (un)conds for each latent. unconds first.
         COND = 0
         UNCOND = 1
-        cond_or_uncond=c['transformer_options']['cond_or_uncond']  # e.g.: [1, 0, 0]
+        cond_or_uncond=self.cond_or_uncond  # e.g.: [1, 0, 0]
         batch_chunks=len(cond_or_uncond)
 
         output_ = x_out
@@ -162,20 +162,24 @@ class CFGDenoiser(torch.nn.Module):
         image_cond = self.image_cond
         x = self.x_in
         sigma = self.sigma
-        uncond = self._uu
-        cond = self._cc
 
-        split_point = len(self.conds_list) * len(self.conds_list[0])
-        c_chunks = c_crossattn[-split_point:].chunk(x.shape[0])
-        cond = torch.cat([torch.stack(chunk) for chunk in zip(*c_chunks)])
-        uncond = None
-        if not getattr(self, 'skip_uncond', False):
-            csp = c_crossattn[:-split_point]
-            if csp.shape[0] == 0:
-                uncond = c_crossattn
+        # cond/uncond variables are unused during this situation
+        if True:
+            uncond = self.c_crossattn
+            cond = self.c_crossattn
+        else:
+            split_point = len(self.conds_list) * len(self.conds_list[0])
+            c_chunks = c_crossattn[-split_point:].chunk(x.shape[0])
+            cond = torch.cat([torch.stack(chunk) for chunk in zip(*c_chunks)])
+            if not getattr(self, 'skip_uncond', False):
+                csp = c_crossattn[:-split_point]
+                if csp.shape[0] == 0:
+                    uncond = c_crossattn
+                else:
+                    u_chunks = csp.chunk(x.shape[0])
+                    uncond = torch.cat([torch.stack(chunk) for chunk in zip(*u_chunks)])
             else:
-                u_chunks = csp.chunk(x.shape[0])
-                uncond = torch.cat([torch.stack(chunk) for chunk in zip(*u_chunks)])
+                uncond =  torch.zeros_like(cond)[:x.shape[0]]
 
         out = self.forward(x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond, c)
         out.conds_list = self.conds_list
@@ -206,7 +210,8 @@ class CFGDenoiser(torch.nn.Module):
             x = self.init_latent * self.mask + self.nmask * x
 
         batch_size = x.shape[0]
-        repeats = [tensor.shape[0] for _ in range(batch_size)] if hasattr(self, 'cond_or_uncond') else [len(conds_list[i]) for i in range(batch_size)]
+        if a1111:
+            repeats = [tensor.shape[0] for _ in range(batch_size)] if hasattr(self, 'cond_or_uncond') else [len(conds_list[i]) for i in range(batch_size)]
 
         # if shared.sd_model.model.conditioning_key == "crossattn-adm":
         #     image_uncond = torch.zeros_like(image_cond)
@@ -236,11 +241,9 @@ class CFGDenoiser(torch.nn.Module):
                 else:
                     make_condition_dict = lambda c_crossattn, c_concat: {**c, "c_crossattn": c_crossattn}
         
-        skip_uncond = getattr(self, 'skip_uncond', False)
+        skip_uncond = False if not a1111 else getattr(self, 'skip_uncond', False)
 
         if not is_edit_model:
-            if skip_uncond:
-                uncond = torch.zeros_like(x)
             if a1111:
                 # A1111: conds for each latent image goes in first, then unconds for each latent image.
                 # all conds in the beginning, then unconds. look at how cond_in is constructed.
@@ -290,11 +293,29 @@ class CFGDenoiser(torch.nn.Module):
 
         # alternating uncond allows for higher thresholds without the quality loss normally expected from raising it
         if self.step % 2 and s_min_uncond > 0 and sigma[0] < s_min_uncond and not is_edit_model:
-            skip_uncond = True
-            x_in = x_in[:-batch_size]
-            sigma_in = sigma_in[:-batch_size]
+            skip_uncond = True and not self.skip_uncond
+            if a1111:
+                x_in = x_in[:-batch_size]
+                sigma_in = sigma_in[:-batch_size]
+            else:
+                COND = 0
+                cond_or_uncond=self.cond_or_uncond
+                batch_chunks=len(cond_or_uncond)
+                output = x_in.chunk(batch_chunks)
+                x_in_conds=[]
+                x_in_unconds=[]
+                for o in range(batch_chunks):
+                    if cond_or_uncond[o] == COND:
+                        x_in_conds.append(output[o])
+                    else:
+                        x_in_unconds.append(output[o])
+                x_in_cond = torch.cat(x_in_conds) if len(x_in_conds) > 0 else x_in
+                x_in_uncond = torch.cat(x_in_unconds) if len(x_in_unconds) > 0 else x_in
+                x_in = x_in_cond
+                sigma_in = sigma_in[:x_in_cond.shape[0]]
 
         self.padded_cond_uncond = False
+         # This won't trigger because our conds get broadcasted beforehand
         if shared.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
             empty = shared.sd_model.cond_stage_model_empty_prompt
             num_repeats = (tensor.shape[1] - uncond.shape[1]) // empty.shape[1]
@@ -315,16 +336,28 @@ class CFGDenoiser(torch.nn.Module):
                 else:
                     cond_in = catenate_conds([tensor, uncond])
             else:
-                cond_in = c['c_crossattn']
+                if skip_uncond:
+                    COND = 0
+                    cond_or_uncond=self.cond_or_uncond
+                    batch_chunks=len(cond_or_uncond)
+                    output = c['c_crossattn'].chunk(batch_chunks)
+                    cond_in_conds=[]
+                    for o in range(batch_chunks):
+                        if cond_or_uncond[o] == COND:
+                            cond_in_conds.append(output[o])
+                    cond_in = c['c_crossattn'] if len(cond_in_conds) == 0 else torch.cat(cond_in_conds)
+                    if 'y' in c: c['y'] = c['y'][-cond_in.shape[0]:]
+                else:
+                    cond_in = c['c_crossattn']
 
             if shared.opts.batch_cond_uncond:
                 if 'model_function_wrapper' in model_options:
-                    x_out = model_options['model_function_wrapper'](self.inner_model, {"input": x_in, "timestep": sigma_in, "c": make_condition_dict(cond_in, image_cond_in), "cond_or_uncond": c['transformer_options']['cond_or_uncond']})
+                    x_out = model_options['model_function_wrapper'](self.inner_model, {"input": x_in, "timestep": sigma_in, "c": make_condition_dict(cond_in, image_cond_in), "cond_or_uncond": self.cond_or_uncond})
                 else:
-                    if a1111:
+                    if a1111 or skip_uncond:
                         x_out = self.inner_model(x_in, sigma_in, **make_condition_dict(cond_in, image_cond_in))
                     else:
-                        x_out = self.comfyui_x_out_to_a1111(self.inner_model(self.input_x, self.timestep_, **c), x, c, skip_uncond)
+                        x_out = self.inner_model(x_in, sigma_in, **c)
             else:
                 x_out = torch.zeros_like(x_in)
                 if 'y' in c: y = c['y']
@@ -332,12 +365,10 @@ class CFGDenoiser(torch.nn.Module):
                     a = batch_offset
                     b = a + batch_size
                     if 'model_function_wrapper' in model_options:
-                        x_out[a:b] = model_options['model_function_wrapper'](self.inner_model, {"input": x_in[a:b], "timestep": sigma_in[a:b], "c": make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]), "cond_or_uncond": c['transformer_options']['cond_or_uncond']})
+                        x_out[a:b] = model_options['model_function_wrapper'](self.inner_model, {"input": x_in[a:b], "timestep": sigma_in[a:b], "c": make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]), "cond_or_uncond": self.cond_or_uncond})
                     else:
                         if 'y' in c: c['y'] = y[a:b]
                         x_out[a:b] = self.inner_model(x_in[a:b], sigma_in[a:b], **make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]))
-                if not a1111:
-                    x_out = self.comfyui_x_out_to_a1111(x_out, x, c, skip_uncond)
         else: # This will never trigger because our conds get broadcasted beforehand.
             x_out = torch.zeros_like(x_in)
             batch_size = batch_size*2 if shared.opts.batch_cond_uncond else batch_size
@@ -355,22 +386,32 @@ class CFGDenoiser(torch.nn.Module):
             if not skip_uncond:
                 x_out[-uncond.shape[0]:] = self.inner_model(x_in[-uncond.shape[0]:], sigma_in[-uncond.shape[0]:], **make_condition_dict(uncond, image_cond_in[-uncond.shape[0]:]))
 
-        denoised_image_indexes = [x[0][0] for x in conds_list]
         if skip_uncond:
+            denoised_image_indexes = [x[0][0] for x in conds_list]
             fake_uncond = torch.cat([x_out[i:i+1] for i in denoised_image_indexes])
-            x_out = torch.cat([x_out, fake_uncond])  # we skipped uncond denoising, so we put cond-denoised image to where the uncond-denoised image should be
+            if a1111:
+                x_out = torch.cat([x_out, fake_uncond])  # we skipped uncond denoising, so we put cond-denoised image to where the uncond-denoised image should be
+            else:
+                fake_uncond = x_out[:x_in_uncond.shape[0]]
+                if fake_uncond.shape[0] < x_in_uncond.shape[0]:
+                    fake_uncond = fake_uncond.repeat(-(-x_in_uncond.shape[0] // fake_uncond.shape[0]),1,1,1)[:x_in_uncond.shape[0]]
+                x_out_len = sum([ix.shape[0] for ix in x_in_conds]) + sum([ix.shape[0] for ix in x_in_unconds])
+                if fake_uncond.shape[0] + x_out.shape[0] == x_out_len: x_out = torch.cat([fake_uncond, x_out])
+
 
         # denoised_params = CFGDenoisedParams(x_out, state.sampling_step, state.sampling_steps, self.inner_model)
         # cfg_denoised_callback(denoised_params)
 
         devices.test_for_nans(x_out, "unet")
+        self.step += 1
 
         if is_edit_model:
             denoised = self.combine_denoised_for_edit_model(x_out, cond_scale)
         else:
             # while x_out.shape[0] != 0 and x_out[-1].isnan().any():
             #     x_out = x_out[:-1]
-            denoised = self.combine_denoised(x_out, conds_list, uncond, cond_scale, x, from_comfy=not a1111)
+            if not a1111: return x_out
+            denoised = self.combine_denoised(x_out, conds_list, uncond, cond_scale, x)
 
         if not self.mask_before_denoising and self.mask is not None:
             denoised = self.init_latent * self.mask + self.nmask * denoised
@@ -390,9 +431,5 @@ class CFGDenoiser(torch.nn.Module):
         # cfg_after_cfg_callback(after_cfg_callback_params)
         # denoised = after_cfg_callback_params.x
 
-        self.step += 1
         del x_out
-        if not a1111:
-            raise ReturnEarly(denoised)
-        else:
-            return denoised
+        return denoised

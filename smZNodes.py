@@ -1140,10 +1140,9 @@ def calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options, c
             conds_list = x_in.conds_list
             if (inner_conds_list_len:=len(conds_list[0])) < conds_len:
                 conds_list = [[(ix, 1.0 if ix > inner_conds_list_len-1 else conds_list[0][ix][1]) for ix in range(conds_len)]]
-            preds = [(cc / (out_count / lenc) - out_uncond) * weight * cond_scale for cc, (_, weight) in zip(conds, conds_list[0])]
             out_cond = out_uncond
-            for pred in preds:
-                out_cond += pred
+            for cond, (_, weight) in zip(conds, conds_list[0]):
+                out_cond = out_cond + (cond / (out_count / lenc) - out_uncond) * weight * cond_scale
 
     del out_count
     return out_cond, out_uncond

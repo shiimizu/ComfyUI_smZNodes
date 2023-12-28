@@ -1138,11 +1138,13 @@ def calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options, c
             lenc = max(conds_len,1.0)
             cond_scale = 1.0/lenc * (1.0 if "sampler_cfg_function" in model_options else cond_scale_in)
             conds_list = x_in.conds_list
-            ucls = [out_uncond]
             if (inner_conds_list_len:=len(conds_list[0])) < conds_len:
                 conds_list = [[(ix, 1.0 if ix > inner_conds_list_len-1 else conds_list[0][ix][1]) for ix in range(conds_len)]]
-            ucls.extend([(cc / (out_count / lenc) - out_uncond) * weight * cond_scale for cc, (_, weight) in zip(conds, conds_list[0])])
-            out_cond = torch.stack(ucls).sum(0)
+            preds = [(cc / (out_count / lenc) - out_uncond) * weight * cond_scale for cc, (_, weight) in zip(conds, conds_list[0])]
+            out_cond = out_uncond
+            for pred in preds:
+                out_cond += pred
+
     del out_count
     return out_cond, out_uncond
 

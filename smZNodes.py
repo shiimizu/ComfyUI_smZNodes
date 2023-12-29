@@ -819,7 +819,7 @@ def prompt_handler(json_data):
     # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
     for clip_id, node in data.items():
         if node["class_type"] == "smZ CLIPTextEncode":
-            if True:
+            if (fast_search:=True):
                 with_SDXL = get_val(data, clip_id, lambda x: isinstance(x, (bool, int, float)), 'with_SDXL')
                 if with_SDXL:
                     ls = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_l'))
@@ -828,7 +828,11 @@ def prompt_handler(json_data):
                 else:
                     text  = get_val(data, clip_id, text_validator, 'text')
                     prompt_editing = is_prompt_editing_str(text)
-                if not prompt_editing: continue
+            else:
+                text = get_val(data, clip_id, text_validator, 'text')
+                prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules([text], steps, None, False)
+                prompt_editing = sum([len(ps) for ps in prompt_schedules]) != 1
+            if not prompt_editing: continue
             steps = find_nearest_ksampler(clip_id)
             if steps is not None:
                 node["inputs"]["smZ_steps"] = steps
@@ -836,16 +840,18 @@ def prompt_handler(json_data):
                     print(f'[smZNodes] id: {clip_id} | steps: {steps}')
     return json_data
 
-def is_prompt_editing_str(t):
+def is_prompt_editing_str(t: str):
+    """
+    Determine if a string includes prompt editing.
+    This won't cover every case, but it does the job for most.
+    """
     if t is None: return True
-    try:
-        i=t.index('[')
-        try: i2=t.index(':',i)
-        except ValueError: i2=t.index('|',i)
-        _=t.index(']',i2)
-    except ValueError:    
-        return False
-    return True
+    if (openb:=t.find('[')) != -1:
+        if (colon:=t.find(':', openb)) != -1 and t.find(']', colon) != -1:
+                return True
+        elif (pipe:=t.find('|', openb)) != -1 and t.find(']', pipe) != -1:
+                return True
+    return False
 
 if hasattr(PromptServer.instance, 'add_on_prompt_handler'):
     PromptServer.instance.add_on_prompt_handler(prompt_handler)

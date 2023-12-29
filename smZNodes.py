@@ -755,72 +755,97 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
 from server import PromptServer
 def prompt_handler(json_data):
     data=json_data['prompt']
-    def tmp():
-        nonlocal data
-        current_clip_id = None
-        def find_nearest_ksampler(clip_id):
-            """Find the nearest KSampler node that references the given CLIPTextEncode id."""
-            for ksampler_id, node in data.items():
-                if "Sampler" in node["class_type"] or "sampler" in node["class_type"]:
-                    # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
-                    if check_link_to_clip(ksampler_id, clip_id):
-                        return get_steps(data, ksampler_id)
-            return None
+    steps_validator = lambda x: isinstance(x, (int, float, str))
+    text_validator = lambda x: isinstance(x, str)
+    def find_nearest_ksampler(clip_id):
+        """Find the nearest KSampler node that references the given CLIPTextEncode id."""
+        nonlocal data, steps_validator
+        for ksampler_id, node in data.items():
+            if "Sampler" in node["class_type"] or "sampler" in node["class_type"]:
+                # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
+                if check_link_to_clip(ksampler_id, clip_id):
+                    return get_val(data, ksampler_id, steps_validator, 'steps')
+        return None
 
-        def get_steps(graph, node_id):
-            node = graph.get(str(node_id), {})
+    def get_val(graph, node_id, validator, val):
+        node = graph.get(str(node_id), {})
+        if val == 'steps':
             steps_input_value = node.get("inputs", {}).get("steps", None)
             if steps_input_value is None:
                 steps_input_value = node.get("inputs", {}).get("sigmas", None)
+        else:
+            steps_input_value = node.get("inputs", {}).get(val, None)
 
-            while(True):
-                # Base case: it's a direct value
-                if isinstance(steps_input_value, (int, float, str)):
+        while(True):
+            # Base case: it's a direct value
+            if not isinstance(steps_input_value, list) and validator(steps_input_value):
+                if val == 'steps':
                     return min(max(1, int(steps_input_value)), 10000)
-
-                # Loop case: it's a reference to another node
-                elif isinstance(steps_input_value, list):
-                    ref_node_id, ref_input_index = steps_input_value
-                    ref_node = graph.get(str(ref_node_id), {})
-                    steps_input_value = ref_node.get("inputs", {}).get("steps", None)
-                    if steps_input_value is None:
-                        keys = list(ref_node.get("inputs", {}).keys())
-                        ref_input_key = keys[ref_input_index % len(keys)]
-                        steps_input_value = ref_node.get("inputs", {}).get(ref_input_key)
                 else:
-                    return None
+                    return steps_input_value
+            # Loop case: it's a reference to another node
+            elif isinstance(steps_input_value, list):
+                ref_node_id, ref_input_index = steps_input_value
+                ref_node = graph.get(str(ref_node_id), {})
+                steps_input_value = ref_node.get("inputs", {}).get(val, None)
+                if steps_input_value is None:
+                    keys = list(ref_node.get("inputs", {}).keys())
+                    ref_input_key = keys[ref_input_index % len(keys)]
+                    steps_input_value = ref_node.get("inputs", {}).get(ref_input_key)
+            else:
+                return None
 
-        def check_link_to_clip(node_id, clip_id, visited=None):
-            """Check if a given node links directly or indirectly to a CLIPTextEncode node."""
-            if visited is None:
-                visited = set()
+    def check_link_to_clip(node_id, clip_id, visited=None):
+        """Check if a given node links directly or indirectly to a CLIPTextEncode node."""
+        nonlocal data
+        if visited is None:
+            visited = set()
 
-            node = data[node_id]
-            
-            if node_id in visited:
-                return False
-            visited.add(node_id)
-
-            for input_value in node["inputs"].values():
-                if isinstance(input_value, list) and input_value[0] == clip_id:
-                    return True
-                if isinstance(input_value, list) and check_link_to_clip(input_value[0], clip_id, visited):
-                    return True
-
+        node = data[node_id]
+        
+        if node_id in visited:
             return False
+        visited.add(node_id)
+
+        for input_value in node["inputs"].values():
+            if isinstance(input_value, list) and input_value[0] == clip_id:
+                return True
+            if isinstance(input_value, list) and check_link_to_clip(input_value[0], clip_id, visited):
+                return True
+
+        return False
 
 
-        # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
-        for clip_id, node in data.items():
-            if node["class_type"] == "smZ CLIPTextEncode":
-                current_clip_id = clip_id
-                steps = find_nearest_ksampler(clip_id)
-                if steps is not None:
-                    node["inputs"]["smZ_steps"] = steps
-                    if opts.debug:
-                        print(f'[smZNodes] id: {current_clip_id} | steps: {steps}')
-    tmp()
+    # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
+    for clip_id, node in data.items():
+        if node["class_type"] == "smZ CLIPTextEncode":
+            if True:
+                with_SDXL = get_val(data, clip_id, lambda x: isinstance(x, (bool, int, float)), 'with_SDXL')
+                if with_SDXL:
+                    ls = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_l'))
+                    gs = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_g'))
+                    prompt_editing = ls or gs
+                else:
+                    text  = get_val(data, clip_id, text_validator, 'text')
+                    prompt_editing = is_prompt_editing_str(text)
+                if not prompt_editing: continue
+            steps = find_nearest_ksampler(clip_id)
+            if steps is not None:
+                node["inputs"]["smZ_steps"] = steps
+                if opts.debug:
+                    print(f'[smZNodes] id: {clip_id} | steps: {steps}')
     return json_data
+
+def is_prompt_editing_str(t):
+    if t is None: return True
+    try:
+        i=t.index('[')
+        try: i2=t.index(':',i)
+        except ValueError: i2=t.index('|',i)
+        _=t.index(']',i2)
+    except ValueError:    
+        return False
+    return True
 
 if hasattr(PromptServer.instance, 'add_on_prompt_handler'):
     PromptServer.instance.add_on_prompt_handler(prompt_handler)

@@ -437,8 +437,9 @@ class ClipTokenWeightEncoder:
                 cond, pooled = encode_toks(token_weight_pairs)
         finally:
                 model_hijack.undo_hijack(model_hijack.cond_stage_model)
-        return (cond.to(model_management.intermediate_device()), 
-                {'pooled_output': pooled.to(model_management.intermediate_device()), 'schedules': schedules, 'conds_list': conds_list})
+        device = model_management.intermediate_device() if hasattr(model_management, 'intermediate_device') else torch.device('cpu')
+        return (cond.to(device), 
+                {'pooled_output': pooled.to(device), 'schedules': schedules, 'conds_list': conds_list})
 
 class SD1ClipModel(ClipTokenWeightEncoder): ...
 
@@ -1015,7 +1016,8 @@ def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_option
 
         return cfg_result
 
-from comfy.samplers import get_area_and_mult, can_concat_cond, cond_cat
+if hasattr(comfy.samplers, 'get_area_and_mult'):
+    from comfy.samplers import get_area_and_mult, can_concat_cond, cond_cat
 def calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options, cond_scale_in):
     conds = []
     a1111 = hasattr(x_in, 'conds_list')

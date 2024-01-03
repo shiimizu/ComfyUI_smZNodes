@@ -12,7 +12,7 @@ import comfy.sd
 import comfy.model_management
 import comfy.samplers
 import comfy.sample
-import copy
+from copy import deepcopy
 
 BOOLEAN = [False, True]
 try:
@@ -202,7 +202,7 @@ class smZ_Settings:
         for k,v in opts_default.__dict__.items():
             setattr(opts_global, k, v)
 
-        opts = copy.deepcopy(opts_default)
+        opts = deepcopy(opts_default)
         [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
         for k,v in kwargs.items():
             setattr(opts, k, v)

@@ -30,7 +30,7 @@ import re
 import itertools
 import binascii
 import math
-import copy
+from copy import deepcopy
 
 try:
     from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL, CLIPTextEncodeSDXLRefiner
@@ -767,12 +767,12 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         out=[]
         for ix, icl in enumerate(conds):
             id = gen_id()
-            current_conds_list=[[copy.deepcopy(conds_list[0][ix])]]
+            current_conds_list=[[deepcopy(conds_list[0][ix])]]
             for ixx, icond in enumerate(icl):
                 _pooled = {"pooled_output": pooled_outputs[ix][ixx], "from_smZ": True, "smZid": id, "conds_list": current_conds_list, **sdxl_params}
                 out.append([icond, _pooled])
     
-    out[0][1]['smZ_opts'] = copy.deepcopy(opts)
+    out[0][1]['smZ_opts'] = deepcopy(opts)
 
     return (out,)
 

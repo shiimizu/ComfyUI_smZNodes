@@ -1,6 +1,6 @@
 from comfy.model_management import vram_state, VRAMState
 import logging
-import copy
+from copy import deepcopy
 from comfy.cli_args import args
 from comfy import model_management
 from . import devices
@@ -91,7 +91,7 @@ cmd_opts.medvram = vram_state == VRAMState.NORMAL_VRAM
 should_batch_cond_uncond = lambda: opts.batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
 opts.batch_cond_uncond = True
 
-opts_default = copy.deepcopy(opts)
+opts_default = deepcopy(opts)
 
 cmd_opts.xformers = xformers_available
 cmd_opts.force_enable_xformers = xformers_available

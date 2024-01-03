@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import importlib
+import inspect
 from functools import partial
 
 def install(module):
@@ -108,13 +109,13 @@ else:
     _wrap_model = comfy.samplers.wrap_model
 
     def get_value_from_args(args, kwargs, key_to_lookup, fn, idx=None):
-        arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
         value = None
         if key_to_lookup in kwargs:
             value = kwargs[key_to_lookup]
         else:
             try:
                 # Get its position in the formal parameters list and retrieve from args
+                arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
                 index = arg_names.index(key_to_lookup)
                 value = args[index] if index < len(args) else None
             except Exception as err:
@@ -124,35 +125,41 @@ else:
 
     def KSampler_sample(*args, **kwargs):
         start_step = get_value_from_args(args, kwargs, 'start_step', _KSampler_sample)
-        if start_step is not None:
-            args[0].model.start_step = start_step
+        args[0].model.start_step = start_step
         return _KSampler_sample(*args, **kwargs)
 
     def sample(*args, **kwargs):
         model = get_value_from_args(args, kwargs, 'model', _sample, 0)
-        positive = get_value_from_args(args, kwargs, 'positive', _sample, 2)
-        negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
-        get_p1 = lambda x: x[1] if type(x) is list else x
-        model.from_smZ = (any([get_p1(_p).get('from_smZ', False) for _p in positive]) or 
-            any([get_p1(_p).get('from_smZ', False) for _p in negative]))
+        # positive = get_value_from_args(args, kwargs, 'positive', _sample, 2)
+        # negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
+        sampler = get_value_from_args(args, kwargs, 'sampler', _sample, 6)
+        model_options = get_value_from_args(args, kwargs, 'model_options', _sample, 8)
+        start_step = model.start_step
+        if 'smZ_opts' in model_options:
+            model_options['smZ_opts'].start_step = start_step
+            opts = model_options['smZ_opts']
+            if hasattr(sampler, 'sampler_function'):
+                if not hasattr(sampler, 'sampler_function_orig'):
+                    sampler.sampler_function_orig = sampler.sampler_function
+                sampler_function_sig_params = inspect.signature(sampler.sampler_function).parameters
+                params = {x: getattr(opts, x)  for x in ['eta', 's_churn', 's_tmin', 's_tmax', 's_noise'] if x in sampler_function_sig_params}
+                sampler.sampler_function = partial(sampler.sampler_function_orig, **params)
+        model.model_options = model_options # Add model_options to CFGNoisePredictor
         return _sample(*args, **kwargs)
 
     class Sampler(_Sampler):
-        def max_denoise(self, model_wrap, sigmas):
-            model = model_wrap.inner_model
-            if hasattr(model, 'inner_model'):
-                model = model.inner_model
-            if getattr(model, 'start_step', None) is not None:
-                model_wrap.inner_model.step = int(model.start_step)
-                del model.start_step
-            if model.from_smZ:
-                from .modules.shared import opts
-                if opts.sgm_noise_multiplier:
-                    return _max_denoise(self, model_wrap, sigmas)
-                else:
-                    return False
-            else:
-                return _max_denoise(self, model_wrap, sigmas)
+        def max_denoise(self, model_wrap: CFGNoisePredictor, sigmas):
+            base_model = model_wrap.inner_model
+            if (model_options:=base_model.model_options) is not None:
+                if 'smZ_opts' in model_options:
+                    opts = model_options['smZ_opts']
+                    if getattr(opts, 'start_step', None) is not None:
+                        model_wrap.step = opts.start_step
+                        opts.start_step = None
+                    if opts.sgm_noise_multiplier:
+                        return _max_denoise(self, model_wrap, sigmas)
+                    else:
+                        return False
 
     comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
     comfy.samplers.KSampler.sample = KSampler_sample
@@ -160,7 +167,8 @@ else:
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
 
 if hasattr(comfy.model_management, 'unet_dtype'):
-    comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype
+    if not hasattr(comfy.model_management, 'unet_dtype_orig'):
+        comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype
     from .modules import devices
     def unet_dtype(device=None, model_params=0):
         dtype = comfy.model_management.unet_dtype_orig(device=device, model_params=model_params)

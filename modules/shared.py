@@ -58,11 +58,18 @@ opts.encode_count = 0
 opts.max_chunk_count = 0
 opts.return_batch_chunks = False
 opts.noise = None
+opts.start_step = None
 opts.pad_with_repeats = True
 opts.randn_source = "cpu"
 opts.lora_functional = False
 opts.use_old_scheduling = False
 opts.eta_noise_seed_delta = 0
+opts.multi_conditioning = False
+opts.eta = 1.0
+opts.s_churn = 0.0
+opts.s_tmin = 0.0
+opts.s_tmax = 0.0 or float('inf')
+opts.s_noise = 1.0
 
 opts.use_CFGDenoiser = False
 opts.sgm_noise_multiplier = True
@@ -72,8 +79,6 @@ opts.sdxl_crop_top = 0
 opts.sdxl_crop_left = 0
 opts.sdxl_refiner_low_aesthetic_score = 2.5
 opts.sdxl_refiner_high_aesthetic_score = 6.0
-
-opts_default = copy.deepcopy(opts)
 
 sd_model = Options()
 sd_model.cond_stage_model = Options()
@@ -85,6 +90,8 @@ cmd_opts.lowvram = vram_state == VRAMState.LOW_VRAM
 cmd_opts.medvram = vram_state == VRAMState.NORMAL_VRAM
 should_batch_cond_uncond = lambda: opts.batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
 opts.batch_cond_uncond = True
+
+opts_default = copy.deepcopy(opts)
 
 cmd_opts.xformers = xformers_available
 cmd_opts.force_enable_xformers = xformers_available

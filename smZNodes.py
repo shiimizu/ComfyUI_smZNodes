@@ -406,7 +406,7 @@ def reconstruct_schedules(schedules, step):
 
 class ClipTokenWeightEncoder:
     def encode_token_weights(self, token_weight_pairs, steps=0, current_step=0, multi=False):
-        schedules = token_weight_pairs
+        schedules = None
         texts = token_weight_pairs
         conds_list = [[(0, 1.0)]]
         from .modules.sd_hijack import model_hijack
@@ -435,6 +435,7 @@ class ClipTokenWeightEncoder:
                 if isinstance(token_weight_pairs, dict):
                     token_weight_pairs = next(iter(token_weight_pairs.values()))
                 cond, pooled = encode_toks(token_weight_pairs)
+                cond.pooled = pooled
         finally:
                 model_hijack.undo_hijack(model_hijack.cond_stage_model)
         device = model_management.intermediate_device() if hasattr(model_management, 'intermediate_device') else torch.device('cpu')
@@ -545,12 +546,30 @@ class TorchHijack:
     def randn_like(self, x):
         return randn_without_seed(x, generator=self.generator, randn_source=self.randn_source)
 
+def _find_outer_instance(target, target_type):
+    import inspect
+    frame = inspect.currentframe()
+    while frame:
+        if target in frame.f_locals:
+            found = frame.f_locals[target]
+            if isinstance(found, target_type): # and found != 1: # steps == 1
+                return found
+        frame = frame.f_back
+    return None
+
+if hasattr(comfy.model_patcher, 'ModelPatcher'):
+    from comfy.model_patcher import ModelPatcher
+else:
+    ModelPatcher = object()
 def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     creates random noise given a latent image and a seed.
     optional arg skip can be used to skip and discard x number of noise generations for a given seed
     """
-    from .modules.shared import opts
+    model = _find_outer_instance('model', ModelPatcher)
+    if model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None:
+        return comfy.sample.prepare_noise_orig(latent_image, seed, noise_inds)
+
     if opts.randn_source == 'gpu':
         device = model_management.get_torch_device()
 
@@ -610,6 +629,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             setattr(opts, k, v)
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
+    opts.multi_conditioning = multi_conditioning
     opts.CLIP_stop_at_last_layers = abs(clip.layer_idx or 1)
     is_sdxl = "SDXL" in type(clip.cond_stage_model).__name__
         
@@ -735,18 +755,14 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                 pooled_outputs[ix] = [pooled_outputs[ix][0]]
 
         out=[]
-        if multi_conditioning and len(conds_list[0]) > 1 and not _is_prompt_editing:
-            if clip_clone.patcher.model_options.get('smZ_opts', None) is None:
-                opts.use_CFGDenoiser = True
         for ix, icl in enumerate(conds):
             id = gen_id()
             current_conds_list=[[copy.deepcopy(conds_list[0][ix])]]
             for ixx, icond in enumerate(icl):
                 _pooled = {"pooled_output": pooled_outputs[ix][ixx], "from_smZ": True, "smZid": id, "conds_list": current_conds_list, **sdxl_params}
                 out.append([icond, _pooled])
-        out[0][1]['orig_len'] = len(out)
     
-    out[0][1]['opts'] = copy.deepcopy(opts)
+    out[0][1]['smZ_opts'] = copy.deepcopy(opts)
 
     return (out,)
 
@@ -914,6 +930,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         self.is_prompt_editing_c = True
         self.is_prompt_editing_u = True
         self.use_CFGDenoiser = None
+        self.opts = None
 
 
     def apply_model(self, *args, **kwargs):
@@ -965,10 +982,11 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             conds_list=[list(((ix:=ix+1), zl[1]) for zl in cll) for cll in cl]
             self.inner_model2.conds_list = conds_list
 
-
         if self.use_CFGDenoiser is None:
-            self.use_CFGDenoiser = (any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in cc]) or 
-                                        any([getp(p)['opts'].use_CFGDenoiser if 'opts' in getp(p) else False for p in uu]))
+            multi_cc = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in cc]) and len(cc) > 1)
+            multi_uu = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in uu]) and len(uu) > 1)
+            self.use_CFGDenoiser = getattr(model_options.get('smZ_opts', None), 'use_CFGDenoiser', False) or multi_cc or multi_uu
+
 
         # to_comfy = not opts.debug
         to_comfy = True
@@ -1008,7 +1026,8 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             self.inner_model2.sigma = timestep
             self.inner_model2.cond_scale = cond_scale
             self.inner_model2.image_cond = image_cond = None
-            self.inner_model2.s_min_uncond = opts.s_min_uncond
+            if not hasattr(self.inner_model2, 's_min_uncond'):
+                self.inner_model2.s_min_uncond = getattr(model_options.get('smZ_opts', None), 's_min_uncond', 0)
             self.inner_model2.model_options = kwargs['model_options'] = model_options
             if 'x' in kwargs: kwargs['x'].conds_list = self.inner_model2.conds_list
             else: args[0].conds_list = self.inner_model2.conds_list
@@ -1017,7 +1036,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             if to_comfy:
                 out = sampling_function(self.inner_model, *args, **kwargs)
             else:
-                out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=opts.s_min_uncond, image_cond=image_cond)
+                out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.inner_model2.s_min_uncond, image_cond=image_cond)
         self.step += 1
         return out
 

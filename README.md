@@ -118,14 +118,14 @@ Image slider links:
 ## Settings
 
 <div align="center">
-    <img width="2753" alt="Settings Workflow" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/31427491-f313-4fa4-be7e-18333cba4de6">
+    <img width="1262" alt="Settings-node-showcase" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/37b50faa-81f4-41b1-88ec-2b28e9c5708e">
     <p>Settings node workflow</p>
 </div>
 
 
-The Settings node can be used to finetune results from CLIP Text Encode++. Some settings apply globally, or just during tokenization, or just for CFGDenoiser. The `RNG` setting applies globally.
+The `Settings` node is a dynamic node functioning similar to the Reroute node and is used to fine-tune results during sampling or tokenization. The inputs can be replaced with another input type even after it's been connected. `CLIP` inputs only applies settings to CLIP Text Encode++. Settings apply locally based on its links just like nodes that do model patches. I made this node to explore the various settings found in `stable-diffusion-webui`.
 
-This node can change whenever it is updated, so you may have to recreate the node to prevent issues. Hook it up before CLIP Text Encode++ nodes to apply any changes. Settings can be overridden by using another Settings node somewhere past a previous one. Right click the node for the `Hide/show all descriptions` menu option.
+This node can change whenever it is updated, so you may have to **recreate** it to prevent issues. Settings can be overridden by using another `Settings` node somewhere past a previous one. Right click the node for the `Hide/show all descriptions` menu option.
 
 
 ## Tips to get reproducible results on both UIs

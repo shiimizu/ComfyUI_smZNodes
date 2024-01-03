@@ -185,9 +185,9 @@ class smZ_Settings:
     CATEGORY = "advanced"
 
     def run(self, *args, **kwargs):
-
         first = kwargs.pop('*', None) if '*' in kwargs else args[0]
         if not hasattr(first, 'clone') or first is None: return (first,)
+
         kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
         kwargs['comma_padding_backtrack'] = kwargs.pop('Prompt word wrap length limit')
         kwargs['use_old_scheduling']=kwargs.pop("Use previous prompt editing timelines")
@@ -195,25 +195,29 @@ class smZ_Settings:
         kwargs['randn_source'] = kwargs.pop('RNG')
         kwargs['eta_noise_seed_delta'] = kwargs.pop('ENSD')
         kwargs['s_tmax'] = kwargs['s_tmax'] or float('inf')
-        
 
         from .modules.shared import opts as opts_global
-        from .modules.shared import opts_default as _opts
-        opts = copy.deepcopy(_opts)
+        from .modules.shared import opts_default
+
+        for k,v in opts_default.__dict__.items():
+            setattr(opts_global, k, v)
+
+        opts = copy.deepcopy(opts_default)
         [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
         for k,v in kwargs.items():
             setattr(opts, k, v)
-        opts_global.debug = opts.debug
 
         first = first.clone()
         opts_key = 'smZ_opts'
         if type(first) is comfy.model_patcher.ModelPatcher:
             first.model_options.pop(opts_key, None)
             first.model_options[opts_key] = opts
+            comfy.sample.prepare_noise = prepare_noise
+            opts_global.debug = opts.debug
         elif type(first) is comfy.sd.CLIP:
             first.patcher.model_options.pop(opts_key, None)
             first.patcher.model_options[opts_key] = opts
-        comfy.sample.prepare_noise = prepare_noise
+            opts_global.debug = opts.debug
         return (first,)
 
 # A dictionary that contains all nodes you want to export with their names

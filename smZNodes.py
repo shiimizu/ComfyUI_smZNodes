@@ -622,12 +622,15 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
                text_g, text_l, steps=1, step=0):
     # clip_clone = clip.clone()
     clip_clone = clip
+    debug=opts.debug # get global opts' debug
     if (opts_new := clip_clone.patcher.model_options.get('smZ_opts', None)) is not None:
         for k,v in opts_new.__dict__.items():
             setattr(opts, k, v)
+        debug = opts_new.debug
     else:
         for k,v in opts_default.__dict__.items():
             setattr(opts, k, v)
+    opts.debug = debug
     opts.prompt_mean_norm = mean_normalization
     opts.use_old_emphasis_implementation = use_old_emphasis_implementation
     opts.multi_conditioning = multi_conditioning

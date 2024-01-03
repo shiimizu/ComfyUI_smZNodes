@@ -227,6 +227,10 @@ function widgetLogicSettings(node) {
     // w._name: to make sure it's from our node. though, it should have a better name for the variable
     for (const w of node.widgets) {
         if (w.name.endsWith('extra')) continue;
+        if (node.inputs?.find(i => i.name === w.name)) {
+            w.type = 'converted-widget'
+        }
+        if(w.type === 'converted-widget') continue;
         if(!w._name) continue;
 
         // heading `values` won't get duplicated names due to group nodes
@@ -308,6 +312,8 @@ _app.registerExtension({
             // allows bypass (in conjunction with below's `allows bypass`)
             // by setting node.inputs[0].type to a concrete type, instead of '*'. ComfyUI will complain otherwise.
             node.onBeforeConnectInput = function(inputIndex) {
+                if (inputIndex !== node.index) return inputIndex
+
                 // so we can connect to reroutes
                 const tp = 'Reroute'
                 node.type = tp
@@ -444,6 +450,7 @@ _app.registerExtension({
                 // index = node.index || 0
                 if (index !== node.index) return
                 node.setupWidgetLogic()
+                // if (index === node.index) node.setupWidgetLogic()
 
                 const type_map = {
                     [LiteGraph.OUTPUT] : 'OUTPUT',
@@ -452,7 +459,7 @@ _app.registerExtension({
 
                 // console.log("======== onConnectionsChange type", type, "connected", connected, 'app.graph.links[l]',app.graph.links)
                 // console.log('=== app.graph.links',app.graph.links, 'node.inputs[index]',node.inputs[index],'node.outputs[index]',node.outputs[index])
-                // console.log('===  onConnectionsChange type', type_map[type], 'index',index,'connected',connected,'node.inputs', node.inputs,'node.outputs', node.outputs,'link_info',link_info)
+                // console.log('===  onConnectionsChange type', type_map[type], 'index',index,'connected',connected,'node.inputs', node.inputs,'node.outputs', node.outputs,'link_info',link_info, 'node', node)
 
                 node.type = nodeType
                 if (node.constructor) node.constructor.type=nodeType
@@ -486,7 +493,7 @@ _app.registerExtension({
                 while (currentNode) {
                     updateNodes.unshift(currentNode);
                     
-                    if (currentNode.inputs && currentNode.inputs[index]?.link) {
+                    if (currentNode?.inputs?.[index]?.link) {
                         const linkId = currentNode.inputs[index].link;
                         // console.log('===  currentNode.inputs[0]',currentNode.inputs[0])
                         const link = app.graph.links[linkId];
@@ -616,10 +623,12 @@ _app.registerExtension({
                     const link = app.graph.links[inputNode.inputs[index].link];
                     if (link) {
                         link.color = color;
-                        node.outputs[index].name = inputNode.__outputType || inputNode.outputs[index].type;
+                        if (node.outputs?.[index]) {
+                            node.outputs[index].name = inputNode.__outputType || inputNode.outputs[index].type;
 
-                        // allows bypass
-                        node.inputs[index] = Object.assign(node.inputs[0], {...node.inputs[index], name: '*', type: node.outputs[index].name});
+                            // allows bypass
+                            node.inputs[index] = Object.assign(node.inputs[0], {...node.inputs[index], name: '*', type: node.outputs[index].name});
+                        }
                     }
                 }
             }

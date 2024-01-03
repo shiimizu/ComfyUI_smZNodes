@@ -166,6 +166,9 @@ else:
     comfy.samplers.sample = sample
 comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
 
+if not hasattr(comfy.sample, 'prepare_noise_orig'):
+    comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
+
 if hasattr(comfy.model_management, 'unet_dtype'):
     if not hasattr(comfy.model_management, 'unet_dtype_orig'):
         comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype

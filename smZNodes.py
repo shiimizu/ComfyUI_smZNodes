@@ -58,7 +58,7 @@ class PopulateVars:
         self_attrs = vars(self)
         self_attrs.update(super_attrs)
 
-should_use_fp16_signature = inspect.signature(comfy.model_management.should_use_fp16)
+should_use_fp16_signature = inspect.signature(model_management.should_use_fp16)
 class ClipTextEncoderCustom:
 
     def _forward(self: comfy.sd1_clip.SDClipModel, tokens):
@@ -568,6 +568,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     model = _find_outer_instance('model', ModelPatcher)
     if model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None:
+        import comfy.sample
         return comfy.sample.prepare_noise_orig(latent_image, seed, noise_inds)
 
     if opts.randn_source == 'gpu':

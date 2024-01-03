@@ -213,10 +213,6 @@ class smZ_Settings:
         elif type(first) is comfy.sd.CLIP:
             first.patcher.model_options.pop(opts_key, None)
             first.patcher.model_options[opts_key] = opts
-
-
-        if not hasattr(comfy.sample, 'prepare_noise_orig'):
-            comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
         comfy.sample.prepare_noise = prepare_noise
         return (first,)
 

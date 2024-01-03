@@ -119,7 +119,7 @@ Image slider links:
 
 <div align="center">
     <img width="1262" alt="Settings-node-showcase" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/37b50faa-81f4-41b1-88ec-2b28e9c5708e">
-    <p>Settings node workflow</p>
+    <p>Settings node showcase</p>
 </div>
 
 

@@ -715,18 +715,23 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         finally:
             clip_clone.cond_stage_model = clip_clone.cond_stage_model_orig
             clip_clone.cond_stage_model.encode_token_weights = clip_clone.cond_stage_model.encode_token_weights_orig
-        
-        if opts.debug:
-            print('[smZNodes] using steps', steps)
         gen_id = lambda : binascii.hexlify(os.urandom(1024))[64:72]
         schedules = pooled['schedules'] if 'schedules' in pooled else pooled
-        out=[]
+        
+        if opts.debug: print('[smZNodes] using steps', steps)
         _is_prompt_editing = is_prompt_editing(schedules)
-        if not _is_prompt_editing:
-            steps = 1
+        if not _is_prompt_editing: steps = 1
         conds=[]
         pooled_outputs = []
+
+        # comfy++
+        if schedules is None:
+            conds = [[cond]]
+            pooled_outputs = [[pooled['pooled_output']]]
+            conds_list = pooled['conds_list']
+
         for x in range(0,steps):
+            if schedules is None: continue
             if 'schedules' in pooled:
                 conds_list, cond = reconstruct_schedules(schedules, x)
             else:
@@ -749,6 +754,7 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         # conds.reverse()
         # if all the same, only take the first cond
         for ix in range(len(conds)):
+            if schedules is None: continue
             if all((conds[ix][0] == icond).all().item() for icond in conds[ix]):
                 conds[ix] = [conds[ix][0]]
             # for ix in range(len(pooled_outputs)):

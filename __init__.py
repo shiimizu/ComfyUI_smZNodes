@@ -125,7 +125,8 @@ else:
 
     def KSampler_sample(*args, **kwargs):
         start_step = get_value_from_args(args, kwargs, 'start_step', _KSampler_sample)
-        args[0].model.start_step = start_step
+        if isinstance(start_step, int):
+            args[0].model.start_step = start_step
         return _KSampler_sample(*args, **kwargs)
 
     def sample(*args, **kwargs):
@@ -134,7 +135,7 @@ else:
         # negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
         sampler = get_value_from_args(args, kwargs, 'sampler', _sample, 6)
         model_options = get_value_from_args(args, kwargs, 'model_options', _sample, 8)
-        start_step = model.start_step
+        start_step = getattr(model, 'start_step', None)
         if 'smZ_opts' in model_options:
             model_options['smZ_opts'].start_step = start_step
             opts = model_options['smZ_opts']

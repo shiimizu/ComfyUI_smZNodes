@@ -151,16 +151,16 @@ else:
     class Sampler(_Sampler):
         def max_denoise(self, model_wrap: CFGNoisePredictor, sigmas):
             base_model = model_wrap.inner_model
+            res = _max_denoise(self, model_wrap, sigmas)
             if (model_options:=base_model.model_options) is not None:
                 if 'smZ_opts' in model_options:
                     opts = model_options['smZ_opts']
                     if getattr(opts, 'start_step', None) is not None:
                         model_wrap.step = opts.start_step
                         opts.start_step = None
-                    if opts.sgm_noise_multiplier:
-                        return _max_denoise(self, model_wrap, sigmas)
-                    else:
-                        return False
+                    if not opts.sgm_noise_multiplier:
+                        res = False
+            return res
 
     comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
     comfy.samplers.KSampler.sample = KSampler_sample

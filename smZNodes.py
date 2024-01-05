@@ -905,8 +905,9 @@ def get_cond(c, current_step, reverse=False):
     for key, group in itertools.groupby(c, fn2):
         lsg=list(group)
         if key is not None:
-            i = min(len(lsg)-1, current_step)
-            if len(lsg) != 1: prompt_editing = True
+            lsg_len = len(lsg)
+            i = current_step if current_step < lsg_len else -1
+            if lsg_len != 1: prompt_editing = True
             if not reverse: _cond.append(lsg[i])
             else: _all.append(lsg)
         else:
@@ -995,7 +996,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         if self.use_CFGDenoiser is None:
             multi_cc = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in cc]) and len(cc) > 1)
             multi_uu = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in uu]) and len(uu) > 1)
-            self.use_CFGDenoiser = getattr(model_options.get('smZ_opts', None), 'use_CFGDenoiser', False) or multi_cc or multi_uu
+            self.use_CFGDenoiser = getattr(model_options.get('smZ_opts', None), 'use_CFGDenoiser', multi_cc or multi_uu)
 
 
         # to_comfy = not opts.debug
@@ -1025,6 +1026,14 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             kwargs['model_options'] = model_options
             out = super().apply_model(*args, **kwargs)
         else:
+            self.inner_model2.x_in = x
+            self.inner_model2.sigma = timestep
+            self.inner_model2.cond_scale = cond_scale
+            self.inner_model2.image_cond = image_cond = None
+            if 'x' in kwargs: kwargs['x'].conds_list = self.inner_model2.conds_list
+            else: args[0].conds_list = self.inner_model2.conds_list
+            if not hasattr(self.inner_model2, 's_min_uncond'):
+                self.inner_model2.s_min_uncond = getattr(model_options.get('smZ_opts', None), 's_min_uncond', 0)
             if 'model_function_wrapper' in model_options:
                 model_options['model_function_wrapper_orig'] = model_options.pop('model_function_wrapper')
             if to_comfy:
@@ -1032,15 +1041,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             else:
                 if 'sigmas' not in model_options['transformer_options']:
                     model_options['transformer_options']['sigmas'] = timestep
-            self.inner_model2.x_in = x
-            self.inner_model2.sigma = timestep
-            self.inner_model2.cond_scale = cond_scale
-            self.inner_model2.image_cond = image_cond = None
-            if not hasattr(self.inner_model2, 's_min_uncond'):
-                self.inner_model2.s_min_uncond = getattr(model_options.get('smZ_opts', None), 's_min_uncond', 0)
             self.inner_model2.model_options = kwargs['model_options'] = model_options
-            if 'x' in kwargs: kwargs['x'].conds_list = self.inner_model2.conds_list
-            else: args[0].conds_list = self.inner_model2.conds_list
             if not hasattr(self.inner_model2, 'skip_uncond'):
                 self.inner_model2.skip_uncond = math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False
             if to_comfy:

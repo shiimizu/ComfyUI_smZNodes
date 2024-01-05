@@ -188,7 +188,7 @@ class smZ_Settings:
         first = kwargs.pop('*', None) if '*' in kwargs else args[0]
         if not hasattr(first, 'clone') or first is None: return (first,)
 
-        kwargs['s_min_uncond'] = max(min(kwargs.pop('NGMS'), 4.0), 0)
+        kwargs['s_min_uncond'] = kwargs.pop('NGMS', 0.0)
         kwargs['comma_padding_backtrack'] = kwargs.pop('Prompt word wrap length limit')
         kwargs['use_old_scheduling']=kwargs.pop("Use previous prompt editing timelines")
         kwargs['use_CFGDenoiser'] = kwargs.pop("Use CFGDenoiser")

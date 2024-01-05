@@ -996,7 +996,10 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         if self.use_CFGDenoiser is None:
             multi_cc = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in cc]) and len(cc) > 1)
             multi_uu = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in uu]) and len(uu) > 1)
-            self.use_CFGDenoiser = getattr(model_options.get('smZ_opts', None), 'use_CFGDenoiser', multi_cc or multi_uu)
+            _opts = model_options.get('smZ_opts', None)
+            if _opts is not None:
+                self.inner_model2.opts = _opts
+            self.use_CFGDenoiser = getattr(_opts, 'use_CFGDenoiser', multi_cc or multi_uu)
 
 
         # to_comfy = not opts.debug

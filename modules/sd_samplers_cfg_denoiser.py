@@ -61,6 +61,7 @@ class CFGDenoiser(torch.nn.Module):
         import inspect
         apply_model_src = inspect.getsource(comfy.model_base.BaseModel.apply_model_orig)
         self.c_crossattn_as_list =  'torch.cat(c_crossattn, 1)' in apply_model_src
+        self.opts = shared.opts
 
     # @property
     # def inner_model(self):
@@ -316,7 +317,7 @@ class CFGDenoiser(torch.nn.Module):
 
         self.padded_cond_uncond = False
          # This won't trigger because our conds get broadcasted beforehand
-        if shared.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
+        if self.opts.pad_cond_uncond and tensor.shape[1] != uncond.shape[1]:
             empty = shared.sd_model.cond_stage_model_empty_prompt
             num_repeats = (tensor.shape[1] - uncond.shape[1]) // empty.shape[1]
 
@@ -350,7 +351,7 @@ class CFGDenoiser(torch.nn.Module):
                 else:
                     cond_in = c['c_crossattn']
 
-            if shared.opts.batch_cond_uncond:
+            if self.opts.batch_cond_uncond:
                 if 'model_function_wrapper' in model_options:
                     x_out = model_options['model_function_wrapper'](self.inner_model, {"input": x_in, "timestep": sigma_in, "c": make_condition_dict(cond_in, image_cond_in), "cond_or_uncond": self.cond_or_uncond})
                 else:
@@ -371,7 +372,7 @@ class CFGDenoiser(torch.nn.Module):
                         x_out[a:b] = self.inner_model(x_in[a:b], sigma_in[a:b], **make_condition_dict(subscript_cond(cond_in, a, b), image_cond_in[a:b]))
         else: # This will never trigger because our conds get broadcasted beforehand.
             x_out = torch.zeros_like(x_in)
-            batch_size = batch_size*2 if shared.opts.batch_cond_uncond else batch_size
+            batch_size = batch_size*2 if self.opts.batch_cond_uncond else batch_size
             for batch_offset in range(0, tensor.shape[0], batch_size):
                 a = batch_offset
                 b = min(a + batch_size, tensor.shape[0])

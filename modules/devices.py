@@ -15,11 +15,17 @@ def has_mps() -> bool:
         return mac_specific.has_mps
 
 cpu = torch.device("cpu")
-device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
+device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = model_management.get_torch_device()
 dtype = torch.float16
 dtype_vae = torch.float16
 dtype_unet = torch.float16
 unet_needs_upcast = False
+
+def torch_gc():
+    model_management.soft_empty_cache()
+
+def get_optimal_device():
+    return model_management.get_torch_device()
 
 def cond_cast_unet(input):
     return input.to(dtype_unet) if unet_needs_upcast else input

@@ -117,7 +117,7 @@ class StableDiffusionModelHijack:
         if hasattr(m, 'clip'):
             m = getattr(m, m.clip)
         model_embeddings = m.transformer.text_model.embeddings
-        model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
+        model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self, "clip_g" if "SDXLClipG" in type(m).__name__ else "clip_l")
         model_embeddings.token_embedding.weight = model_embeddings.token_embedding.wrapped._parameters.get('weight').to(device=devices.device)
         m.tokenizer_parent0 = tokenizer_parent
         m.tokenizer_parent = tokenizer_parent2
@@ -220,6 +220,7 @@ class EmbeddingsWithFixes(torch.nn.Module):
         super().__init__()
         self.wrapped = wrapped
         self.embeddings = embeddings
+        self.textual_inversion_key = textual_inversion_key
 
     def forward(self, input_ids):
         batch_fixes = self.embeddings.fixes
@@ -227,7 +228,7 @@ class EmbeddingsWithFixes(torch.nn.Module):
 
         try:
             inputs_embeds = self.wrapped(input_ids)
-        except:
+        except Exception:
             inputs_embeds = self.wrapped(input_ids.cpu())
 
         if batch_fixes is None or len(batch_fixes) == 0 or max([len(x) for x in batch_fixes]) == 0:

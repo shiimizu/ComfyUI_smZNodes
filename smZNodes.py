@@ -353,6 +353,10 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
     emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
     matches = emb_re.finditer(text)
+    clip_key = "clip_g" if "SDXLClipG" in type(self.wrapped).__name__ else "clip_l"
+    if not getattr(self.hijack.embedding_db, 'embeddings', None):
+        self.hijack.embedding_db.embeddings = {}
+    embeddings = self.hijack.embedding_db.embeddings
     for matchNum, match in enumerate(matches, start=1):
         found=False
         ext = ext if (ext:=match.group(4)) else ''
@@ -366,10 +370,19 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                     print(f'[smZNodes] using embedding:{embedding_name}')
                 if embed.device != devices.device:
                     embed = embed.to(device=devices.device)
-                self.hijack.embedding_db.register_embedding(Embedding(embed, embedding_sname), self)
+                if embedding_sname not in embeddings:
+                    embeddings[embedding_sname] = {}
+                embeddings[embedding_sname][clip_key] = embed
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
     out = emb_re.sub(r"\2\5\6", text)
+    for name, data in embeddings.items():
+        emb = Embedding(data, name)
+        shape = sum([v.shape[-1] for v in data.values()])
+        vectors = max([v.shape[0] for v in data.values()])
+        emb.shape = shape
+        emb.vectors = vectors
+        self.hijack.embedding_db.register_embedding(emb, self)
     return out
 
 def expand(tensor1, tensor2):
@@ -501,9 +514,10 @@ def is_prompt_editing(schedules):
             for vb in v:
                 if len(vb) != 1: ret = True
         else:
-            for vb in v.batch:
-                for cs in vb:
-                    if len(cs.schedules) != 1: ret = True
+            if v:
+                for vb in v.batch:
+                    for cs in vb:
+                        if len(cs.schedules) != 1: ret = True
     return ret
 
 # ===================================================================

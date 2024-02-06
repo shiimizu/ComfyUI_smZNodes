@@ -14,9 +14,6 @@ class Embedding:
         self.optimizer_state_dict = None
         self.filename = None
 
-        self.shape = vec.shape[-1]
-        self.vectors = vec.shape[0]
-
     def save(self, filename):
         embedding_data = {
             "string_to_token": {"*": 265},
@@ -46,7 +43,7 @@ class Embedding:
                 r = (r * 281 ^ int(v) * 997) & 0xFFFFFFFF
             return r
 
-        self.cached_checksum = f'{const_hash(self.vec.reshape(-1) * 100) & 0xffff:04x}'
+        self.cached_checksum = f'{const_hash((next(iter(self.vec.values())) if isinstance(self.vec, dict) else self.vec).reshape(-1) * 100) & 0xffff:04x}'
         return self.cached_checksum
 
 class EmbeddingDatabase:

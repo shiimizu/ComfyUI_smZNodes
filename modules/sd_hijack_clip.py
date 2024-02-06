@@ -207,9 +207,9 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             z = self.process_tokens(tokens, multipliers)
             zs.append(z)
             po.append(z.pooled)
-        if len(used_embeddings) > 0:
-            embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
-            self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
+        # if len(used_embeddings) > 0:
+        #     embeddings_list = ", ".join([f'{name} [{embedding.checksum()}]' for name, embedding in used_embeddings.items()])
+        #     self.hijack.comments.append(f"Used embeddings: {embeddings_list}")
         zst = torch.hstack(zs)
         zst.pooled = zs[0].pooled if zst.shape[0] == 1 else torch.cat([torch.stack(p) for p in zip(*po)])[:zst.shape[0]]
         if getattr(self.wrapped, 'return_pooled', False):

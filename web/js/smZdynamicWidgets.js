@@ -470,8 +470,8 @@ _app.registerExtension({
                 // Prevent multiple connections to different types when we have no input
                 if (connected && type === LiteGraph.OUTPUT) {
                     // Ignore wildcard nodes as these will be updated to real types
-                    const types = this.outputs?.[index]?.links ? new Set(this.outputs[index].links.map((l) => app.graph.links[l].type).filter((t) => t !== "*")) : new Set()
-                    if (types.size > 1) {
+                    const types = this.outputs?.[index]?.links ? new Set(this.outputs[index].links.map((l) => app.graph.links[l]?.type)?.filter((t) => t !== "*")) : new Set()
+                    if (types?.size > 1) {
                         const linksToDisconnect = [];
                         for (let i = 0; i < this.outputs[index].links.length - 1; i++) {
                             const linkId = this.outputs[index].links[i];

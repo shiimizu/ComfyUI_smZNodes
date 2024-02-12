@@ -741,11 +741,13 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
         conds=[]
         pooled_outputs = []
 
-        # comfy++
-        if schedules is None:
+        if parser == 'comfy++':
+            steps=0
             conds = [[cond]]
-            pooled_outputs = [[pooled['pooled_output']]]
-            conds_list = pooled['conds_list']
+            if 'pooled_output' not in pooled:
+                pooled = pooled.get('g', pooled.get('h', pooled.get('l', pooled)))
+            pooled_outputs = [[pooled['pooled_output'] if 'pooled_output' in pooled  else pooled]]
+            conds_list = pooled['conds_list'] if 'conds_list' in pooled else [[(0, 1.0)]]
 
         for x in range(0,steps):
             if schedules is None: continue
@@ -768,7 +770,6 @@ def run(clip: comfy.sd.CLIP, text, parser, mean_normalization,
             for ix, ipo in enumerate(cond.pooled.chunk(cond.pooled.shape[0])):
                 pooled_outputs[ix].append(ipo)
 
-        # conds.reverse()
         # if all the same, only take the first cond
         for ix in range(len(conds)):
             if schedules is None: continue

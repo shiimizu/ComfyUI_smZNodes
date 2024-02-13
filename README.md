@@ -5,48 +5,11 @@ A selection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/Comf
 1. [CLIP Text Encode++](#clip-text-encode)
 2. [Settings](#settings)
 
-### Installation
+Contents
 
-Three methods are available for installation:
-
-1. Load via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager)
-2. Clone the repository directly into the extensions directory.
-3. Download the project manually.
-
-
-#### Load via ComfyUI Manager
-
-
-<div align="center">
-    <img width="1207" alt="ComfyUI Manager" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/310d934d-c8db-4c4a-af2a-7a26938eb751">
-    <p>Install via ComfyUI Manager</p>
-</div>
-
-#### Clone Repository
-
-```shell
-cd path/to/your/ComfyUI/custom_nodes
-git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
-```
-
-#### Download Manually
-
-1. Download the project archive from [here](https://github.com/shiimizu/ComfyUI_smZNodes/archive/refs/heads/main.zip).
-2. Extract the downloaded zip file.
-3. Move the extracted files to `path/to/your/ComfyUI/custom_nodes`.
-4. Restart ComfyUI
-
-The folder structure should resemble: `path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes`.
-
-
-### Update
-
-To update the extension, update via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) or pull the latest changes from the repository:
-
-```shell
-cd path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes
-git pull
-```
+* [Tips to get reproducible results on both UIs](#tips-to-get-reproducible-results-on-both-uis)
+* [FAQs](#faqs)
+* [Installation](#installation)
 
 
 ## CLIP Text Encode++
@@ -62,7 +25,7 @@ CLIP Text Encode++ can generate identical embeddings from [stable-diffusion-webu
 
 This means you can reproduce the same images generated from `stable-diffusion-webui` on `ComfyUI`.
 
-Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences due to how `ComfyUI` denoises images. In that case, you can enable the option to use another denoiser with the Settings node.
+Simple prompts generate _identical_ images. More complex prompts with complex attention/emphasis/weighting may generate images with slight differences. In that case, you can try using the `Settings` node to match outputs.
 
 ### Features
 
@@ -79,8 +42,8 @@ These images can be dragged into ComfyUI to load their workflows. Each image is 
 
 |stable-diffusion-webui|A1111 parser|Comfy parser|
 |:---:|:---:|:---:|
-| ![00008-0-cinematic wide shot of the ocean, beach, (palmtrees_1 5), at sunset, milkyway](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/719457d8-96fc-495e-aabc-48c4fe4d648d) | ![A1111 parser comparison 1](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/c7e0d3cd-ae22-4a6a-bc21-a2b6e10f9652) | ![Comfy parser comparison 1](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/21415ca1-57f9-454a-8e63-19b04832a38c) |
-| ![00007-0-a photo of an astronaut riding a horse on mars, ((palmtrees_1 2) on water)](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/9ad8b569-8c6d-4a09-bf36-288d81ce4cf9) | ![A1111 parser comparison 2](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/6986be92-b210-4fdd-8667-7004d6cd628c) | ![Comfy parser comparison 2](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/c0d918bb-32df-4aaa-ae85-def22c2d7d07) |
+| ![00008-0-cinematic wide shot of the ocean, beach, (palmtrees_1 5), at sunset, milkyway](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/719457d8-96fc-495e-aabc-48c4fe4d648d) | ![A1111 parser comparison 1](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/e446b4ab-6f11-4194-b708-f7bdd1cb8fa8) | ![Comfy parser comparison 1](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/e2e04235-02cc-433a-a2f0-7d58be14d6f5) |
+| ![00007-0-a photo of an astronaut riding a horse on mars, ((palmtrees_1 2) on water)](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/9ad8b569-8c6d-4a09-bf36-288d81ce4cf9) | ![A1111 parser comparison 2](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/81767441-c286-41db-a59a-4c69603d84d7) | ![Comfy parser comparison 2](https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/ed62c23c-c9bd-41cf-9a37-eab4f9d5e12b) |
 
 Image slider links:
 - https://imgsli.com/MTkxMjE0
@@ -123,7 +86,7 @@ Image slider links:
 </div>
 
 
-The `Settings` node is a dynamic node functioning similar to the Reroute node and is used to fine-tune results during sampling or tokenization. The inputs can be replaced with another input type even after it's been connected. `CLIP` inputs only applies settings to CLIP Text Encode++. Settings apply locally based on its links just like nodes that do model patches. I made this node to explore the various settings found in `stable-diffusion-webui`.
+The `Settings` node is a dynamic node functioning similar to the Reroute node and is used to fine-tune results during sampling or tokenization. The inputs can be replaced with another input type even after it's been connected. `CLIP` inputs only apply settings to CLIP Text Encode++. Settings apply locally based on its links just like nodes that do model patches. I made this node to explore the various settings found in `stable-diffusion-webui`.
 
 This node can change whenever it is updated, so you may have to **recreate** it to prevent issues. Settings can be overridden by using another `Settings` node somewhere past a previous one. Right click the node for the `Hide/show all descriptions` menu option.
 
@@ -134,11 +97,59 @@ This node can change whenever it is updated, so you may have to **recreate** it 
 - If you're using `DDIM` as your sampler, use the `ddim_uniform` scheduler.
 - There are different `unipc` configurations. Adjust accordingly on both UIs.
 
-### FAQs
+## FAQs
 - How does this differ from [`ComfyUI_ADV_CLIP_emb`](https://github.com/BlenderNeko/ComfyUI_ADV_CLIP_emb)?
-    - In regards to `stable-diffusion-webui`:
-      - Mine parses prompts using their parser.
-      -  Mine takes the mean exactly as they do. `ComfyUI_ADV_CLIP_emb` probably takes the correct mean but hey, this is for the purpose of reproducible images.
+    - While the weights are normalized in the same manner, the tokenization and encoding pipeline that's taken from stable-diffusion-webui differs from ComfyUI's. These small changes add up and ultimately produces different results.
 - Where can I learn more about how ComfyUI interprets weights?
     - https://comfyanonymous.github.io/ComfyUI_examples/faq/
     - https://blenderneko.github.io/ComfyUI-docs/Interface/Textprompts/
+    - [comfyui.creamlab.net)](https://comfyui.creamlab.net/guides/f_text_prompt)
+
+
+## Installation
+
+Three methods are available for installation:
+
+1. Load via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager)
+2. Clone the repository directly into the extensions directory.
+3. Download the project manually.
+
+
+### Load via ComfyUI Manager
+
+
+<div align="center">
+    <img width="1207" alt="ComfyUI Manager" src="https://github.com/shiimizu/ComfyUI_smZNodes/assets/54494639/310d934d-c8db-4c4a-af2a-7a26938eb751">
+    <p>Install via ComfyUI Manager</p>
+</div>
+
+### Clone Repository
+
+```shell
+cd path/to/your/ComfyUI/custom_nodes
+git clone https://github.com/shiimizu/ComfyUI_smZNodes.git
+```
+
+### Download Manually
+
+1. Download the project archive from [here](https://github.com/shiimizu/ComfyUI_smZNodes/archive/refs/heads/main.zip).
+2. Extract the downloaded zip file.
+3. Move the extracted files to `path/to/your/ComfyUI/custom_nodes`.
+4. Restart ComfyUI
+
+The folder structure should resemble: `path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes`.
+
+
+### Update
+
+To update the extension, update via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) or pull the latest changes from the repository:
+
+```shell
+cd path/to/your/ComfyUI/custom_nodes/ComfyUI_smZNodes
+git pull
+```
+
+## Credits
+
+* [AUTOMATIC1111](https://github.com/AUTOMATIC1111) / [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
+* [comfyanonymous](https://github.com/comfyanonymous) / [ComfyUI](https://github.com/comfyanonymous/ComfyUI)

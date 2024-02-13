@@ -860,20 +860,22 @@ def prompt_handler(json_data):
     # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
     for clip_id, node in data.items():
         if node["class_type"] == "smZ CLIPTextEncode":
-            if (fast_search:=True):
-                with_SDXL = get_val(data, clip_id, lambda x: isinstance(x, (bool, int, float)), 'with_SDXL')
-                if with_SDXL:
-                    ls = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_l'))
-                    gs = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_g'))
-                    prompt_editing = ls or gs
+            check_str = prompt_editing = False
+            if check_str:
+                if (fast_search:=True):
+                    with_SDXL = get_val(data, clip_id, lambda x: isinstance(x, (bool, int, float)), 'with_SDXL')
+                    if with_SDXL:
+                        ls = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_l'))
+                        gs = is_prompt_editing_str(get_val(data, clip_id, text_validator, 'text_g'))
+                        prompt_editing = ls or gs
+                    else:
+                        text  = get_val(data, clip_id, text_validator, 'text')
+                        prompt_editing = is_prompt_editing_str(text)
                 else:
-                    text  = get_val(data, clip_id, text_validator, 'text')
-                    prompt_editing = is_prompt_editing_str(text)
-            else:
-                text = get_val(data, clip_id, text_validator, 'text')
-                prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules([text], steps, None, False)
-                prompt_editing = sum([len(ps) for ps in prompt_schedules]) != 1
-            if not prompt_editing: continue
+                    text = get_val(data, clip_id, text_validator, 'text')
+                    prompt_schedules = prompt_parser.get_learned_conditioning_prompt_schedules([text], steps, None, False)
+                    prompt_editing = sum([len(ps) for ps in prompt_schedules]) != 1
+            if check_str and not prompt_editing: continue
             steps = find_nearest_ksampler(clip_id)
             if steps is not None:
                 node["inputs"]["smZ_steps"] = steps

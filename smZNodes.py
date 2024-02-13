@@ -1170,7 +1170,7 @@ def calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options, c
         timestep_ = torch.cat([timestep] * batch_chunks)
 
         if control is not None:
-            c['control'] = control.get_control(input_x, timestep_, c, len(cond_or_uncond))
+            c['control'] = control if 'tiled_diffusion' in model_options else control.get_control(input_x, timestep_, c, len(cond_or_uncond))
 
         transformer_options = {}
         if 'transformer_options' in model_options:

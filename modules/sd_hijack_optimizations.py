@@ -6,11 +6,11 @@ import torch
 from torch import einsum
 
 from comfy import ldm
-from ldm.util import default
+from comfy.ldm.util import default
 from einops import rearrange
 
 from . import shared, errors, devices
-from ldm.modules import sub_quadratic_attention
+from comfy.ldm.modules import sub_quadratic_attention
 from .hypernetworks import hypernetwork
 
 def apply_funcs(undo=False):

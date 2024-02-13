@@ -17,6 +17,7 @@ class PromptChunk:
     def __init__(self):
         self.tokens = []
         self.multipliers = []
+        self.multipliers_solo_emb = []
         self.fixes = []
 
 
@@ -46,6 +47,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         chunk = PromptChunk()
         chunk.tokens = [self.id_start] + [self.id_end] * (self.chunk_length + 1)
         chunk.multipliers = [1.0] * (self.chunk_length + 2)
+        chunk.multipliers_solo_emb = [1.0] * (self.chunk_length + 2)
         return chunk
 
     def get_target_prompt_token_count(self, token_count):
@@ -103,8 +105,10 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             if to_add > 0:
                 chunk.tokens += [self.id_end] * to_add
                 chunk.multipliers += [1.0] * to_add
+                chunk.multipliers_solo_emb += [1.0] * to_add
             chunk.tokens = [self.id_start] + chunk.tokens + [self.id_end]
             chunk.multipliers = [1.0] + chunk.multipliers + [1.0]
+            chunk.multipliers_solo_emb = [1.0] + chunk.multipliers_solo_emb + [1.0]
             last_comma = -1
             chunks.append(chunk)
             chunk = PromptChunk()
@@ -124,17 +128,21 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                     break_location = last_comma + 1
                     reloc_tokens = chunk.tokens[break_location:]
                     reloc_mults = chunk.multipliers[break_location:]
+                    reloc_mults_solo_emb = chunk.multipliers_solo_emb[break_location:]
                     chunk.tokens = chunk.tokens[:break_location]
                     chunk.multipliers = chunk.multipliers[:break_location]
+                    chunk.multipliers_solo_emb = chunk.multipliers_solo_emb[:break_location]
                     next_chunk()
                     chunk.tokens = reloc_tokens
                     chunk.multipliers = reloc_mults
+                    chunk.multipliers_solo_emb = reloc_mults_solo_emb
                 if len(chunk.tokens) == self.chunk_length:
                     next_chunk()
                 embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, position)
                 if embedding is None:
                     chunk.tokens.append(token)
                     chunk.multipliers.append(weight)
+                    chunk.multipliers_solo_emb.append(weight)
                     position += 1
                     continue
                 emb_len = int(embedding.vectors)
@@ -143,6 +151,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                 chunk.fixes.append(PromptChunkFix(len(chunk.tokens), embedding))
                 chunk.tokens += [0] * emb_len
                 chunk.multipliers += [weight] * emb_len
+                # Only one weight for each embedding instead of something like 0.1 for like 10 tokens, which will skew the weight normalization
+                chunk.multipliers_solo_emb += [weight] + ([1.0] * (emb_len-1))
                 position += embedding_length_in_tokens
         if chunk.tokens or not chunks:
             next_chunk(is_last=True)
@@ -198,13 +208,20 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         po = []
         for i in range(chunk_count):
             batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
-            tokens = [x.tokens for x in batch_chunk]
-            multipliers = [x.multipliers for x in batch_chunk]
-            self.hijack.fixes = [x.fixes for x in batch_chunk]
+            tokens = []
+            multipliers = []
+            multipliers_solo_emb = []
+            self.hijack.fixes = []
+            for x in batch_chunk:
+                tokens.append(x.tokens)
+                multipliers.append(x.multipliers)
+                multipliers_solo_emb.append(x.multipliers_solo_emb)
+                self.hijack.fixes.append(x.fixes)
+
             for fixes in self.hijack.fixes:
                 for _position, embedding in fixes:
                     used_embeddings[embedding.name] = embedding
-            z = self.process_tokens(tokens, multipliers)
+            z = self.process_tokens(tokens, multipliers, multipliers_solo_emb)
             zs.append(z)
             po.append(z.pooled)
         # if len(used_embeddings) > 0:
@@ -217,7 +234,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         else:
             return zst
 
-    def process_tokens(self, remade_batch_tokens, batch_multipliers):
+    def process_tokens(self, remade_batch_tokens, batch_multipliers, batch_multipliers_solo_emb=None):
         """
         sends one single prompt chunk to be encoded by transformers neural network.
         remade_batch_tokens is a batch of tokens - a list, where every element is a list of tokens; usually
@@ -243,13 +260,31 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
         # restoring original mean is likely not correct, but it seems to work well to prevent artifacts that happen otherwise
         batch_multipliers = torch.asarray(batch_multipliers).to(devices.device)
+        if batch_multipliers_solo_emb is None: batch_multipliers_solo_emb = batch_multipliers
+        bm = batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
         if opts.prompt_mean_norm:
+            batch_multipliers_solo_emb = torch.asarray(batch_multipliers_solo_emb).to(devices.device)
+            z_bak = z
             original_mean = z.mean()
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            z = z * bm
             new_mean = z.mean()
-            z = z * (original_mean / new_mean)
+            _mean = original_mean / new_mean
+            validate = lambda x: x > 0.7 and x < 1.6
+            if validate(_mean):
+                z = z * _mean
+            else:
+                # Try again with bm_solo_emb
+                bm_solo_emb = batch_multipliers_solo_emb.reshape(batch_multipliers_solo_emb.shape + (1,)).expand(z.shape)
+                original_mean = z.mean()
+                z = z * bm_solo_emb
+                new_mean = z.mean()
+                _mean = original_mean / new_mean
+                if validate(_mean):
+                    z = z * _mean
+                else:
+                    z = z_bak * (bm / bm_solo_emb.mean())
         else:
-            z = z * batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
+            z = z * bm
         z.pooled = pooled
         return z
 

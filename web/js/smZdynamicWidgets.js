@@ -90,9 +90,11 @@ export function widgetLogic(node, widget) {
         const in_comfy = widget.value.includes("comfy")
         toggleMenuOption(node, ['multi_conditioning', wname], !in_comfy)
         toggleMenuOption(node, ['mean_normalization', wname], widget.value !== "comfy")
-        if (in_comfy) {
-            toggleMenuOption(node, ['use_old_emphasis_implementation', wname], false)
-        }
+        const uoei = 'use_old_emphasis_implementation'
+        if (findWidgetsByName(node, uoei)?.some(x => x?.value))
+            toggleMenuOption(node, [uoei, wname], true)
+        if (in_comfy)
+            toggleMenuOption(node, [uoei, wname], false)
     } else if (wname.endsWith("with_SDXL")) {
         toggleMenuOption(node, ['text', wname], !widget.value)
 

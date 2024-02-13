@@ -15,15 +15,17 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
     cache = {}
     batch_tokens = self.tokenize(texts)
     batch_multipliers = []
+    batch_multipliers_solo_emb = []
     for tokens in batch_tokens:
         tuple_tokens = tuple(tokens)
 
         if tuple_tokens in cache:
-            remade_tokens, fixes, multipliers = cache[tuple_tokens]
+            remade_tokens, fixes, multipliers, multipliers_solo_emb = cache[tuple_tokens]
         else:
             fixes = []
             remade_tokens = []
             multipliers = []
+            multipliers_solo_emb = []
             mult = 1.0
 
             i = 0
@@ -31,6 +33,12 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
                 token = tokens[i]
 
                 embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, i)
+                if isinstance(embedding, dict):
+                    if 'open' in self.__class__.__name__.lower():
+                        embedding = embedding.get('g', embedding)
+                    else:
+                        embedding.pop('g', None)
+                        embedding = next(iter(embedding.values()))
 
                 mult_change = self.token_mults.get(token) if shared.opts.enable_emphasis else None
                 if mult_change is not None:
@@ -39,12 +47,14 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
                 elif embedding is None:
                     remade_tokens.append(token)
                     multipliers.append(mult)
+                    multipliers_solo_emb.append(mult)
                     i += 1
                 else:
                     emb_len = int(embedding.vec.shape[0])
                     fixes.append((len(remade_tokens), embedding))
                     remade_tokens += [0] * emb_len
                     multipliers += [mult] * emb_len
+                    multipliers_solo_emb += [mult] + ([1.0] * (emb_len-1))
                     used_custom_terms.append((embedding.name, embedding.checksum()))
                     i += embedding_length_in_tokens
 
@@ -58,19 +68,23 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
             token_count = len(remade_tokens)
             remade_tokens = remade_tokens + [id_end] * (maxlen - 2 - len(remade_tokens))
             remade_tokens = [id_start] + remade_tokens[0:maxlen - 2] + [id_end]
-            cache[tuple_tokens] = (remade_tokens, fixes, multipliers)
+            cache[tuple_tokens] = (remade_tokens, fixes, multipliers, multipliers_solo_emb)
 
         multipliers = multipliers + [1.0] * (maxlen - 2 - len(multipliers))
         multipliers = [1.0] + multipliers[0:maxlen - 2] + [1.0]
 
+        multipliers_solo_emb = multipliers_solo_emb + [1.0] * (maxlen - 2 - len(multipliers_solo_emb))
+        multipliers_solo_emb = [1.0] + multipliers_solo_emb[0:maxlen - 2] + [1.0]
+
         remade_batch_tokens.append(remade_tokens)
         hijack_fixes.append(fixes)
         batch_multipliers.append(multipliers)
-    return batch_multipliers, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, token_count
+        batch_multipliers_solo_emb.append(multipliers_solo_emb)
+    return batch_multipliers, batch_multipliers_solo_emb, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, token_count
 
 
 def forward_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, texts):
-    batch_multipliers, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, _token_count = process_text_old(self, texts)
+    batch_multipliers, batch_multipliers_solo_emb, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, _token_count = process_text_old(self, texts)
 
     chunk_count = max([len(x) for x in remade_batch_tokens])
 
@@ -84,4 +98,4 @@ def forward_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, text
         self.hijack.comments.append(f"Used embeddings: {embedding_names}")
 
     self.hijack.fixes = hijack_fixes
-    return self.process_tokens(remade_batch_tokens, batch_multipliers)
+    return self.process_tokens(remade_batch_tokens, batch_multipliers, batch_multipliers_solo_emb)

@@ -269,7 +269,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             z = z * bm
             new_mean = z.mean()
             _mean = original_mean / new_mean
-            validate = lambda x: x > 0.7 and x < 1.6
+            validate = lambda x: x > 0.6 and x < 1.6
             if validate(_mean):
                 z = z * _mean
             else:

@@ -174,8 +174,8 @@ if hasattr(comfy.model_management, 'unet_dtype'):
     if not hasattr(comfy.model_management, 'unet_dtype_orig'):
         comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype
     from .modules import devices
-    def unet_dtype(device=None, model_params=0):
-        dtype = comfy.model_management.unet_dtype_orig(device=device, model_params=model_params)
+    def unet_dtype(device=None, model_params=0, *args, **kwargs):
+        dtype = comfy.model_management.unet_dtype_orig(device=device, model_params=model_params, *args, **kwargs)
         if model_params != 0:
             devices.dtype_unet = dtype
         return dtype

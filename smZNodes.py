@@ -987,28 +987,30 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         if self.is_prompt_editing_c:
             cc, ccp=get_cond(cond, self.step)
             self.is_prompt_editing_c=ccp
-            if 'cond' in kwargs: kwargs['cond'] = cc
-            else: args[2]=cc
         else: cc = cond
 
         if self.is_prompt_editing_u:
             uu, uup=get_cond(uncond, self.step)
             self.is_prompt_editing_u=uup
-            if 'uncond' in kwargs: kwargs['uncond'] = uu
-            else: args[3]=uu
         else: uu = uncond
 
-        # extends a conds_list to the number of latent images
-        if not hasattr(self.inner_model2, 'conds_list'):
-            conds_list = []
-            for ccp in cc:
-                cpl = ccp['conds_list'] if 'conds_list' in ccp else [[(0, 1.0)]]
-                conds_list.extend(cpl[0])
-            conds_list=[conds_list]
-            ix=-1
-            cl = conds_list * len(x)
-            conds_list=[list(((ix:=ix+1), zl[1]) for zl in cll) for cll in cl]
-            self.inner_model2.conds_list = conds_list
+        if 'transformer_options' not in model_options:
+            model_options['transformer_options'] = {}
+
+        if (any([getp(p).get('from_smZ', False) for p in cc]) or
+            any([getp(p).get('from_smZ', False) for p in uu])):
+            model_options['transformer_options']['from_smZ'] = True
+
+        if not model_options['transformer_options'].get('from_smZ', False):
+            out = super().apply_model(*args, **kwargs)
+            return out
+
+        if self.is_prompt_editing_c:
+            if 'cond' in kwargs: kwargs['cond'] = cc
+            else: args[2]=cc
+        if self.is_prompt_editing_u:
+            if 'uncond' in kwargs: kwargs['uncond'] = uu
+            else: args[3]=uu
 
         if self.use_CFGDenoiser is None:
             multi_cc = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in cc]) and len(cc) > 1)
@@ -1018,6 +1020,17 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
                 self.inner_model2.opts = _opts
             self.use_CFGDenoiser = getattr(_opts, 'use_CFGDenoiser', multi_cc or multi_uu)
 
+        # extends a conds_list to the number of latent images
+        if self.use_CFGDenoiser and not hasattr(self.inner_model2, 'conds_list'):
+            conds_list = []
+            for ccp in cc:
+                cpl = ccp['conds_list'] if 'conds_list' in ccp else [[(0, 1.0)]]
+                conds_list.extend(cpl[0])
+            conds_list=[conds_list]
+            ix=-1
+            cl = conds_list * len(x)
+            conds_list=[list(((ix:=ix+1), zl[1]) for zl in cll) for cll in cl]
+            self.inner_model2.conds_list = conds_list
 
         # to_comfy = not opts.debug
         to_comfy = True
@@ -1034,13 +1047,6 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             uu = list(reversed(uu))
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else: args[3]=uu
-
-        if 'transformer_options' not in model_options:
-            model_options['transformer_options'] = {}
-
-        if (any([getp(p).get('from_smZ', False) for p in cc]) or 
-            any([getp(p).get('from_smZ', False) for p in uu])):
-            model_options['transformer_options']['from_smZ'] = True
         
         if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options

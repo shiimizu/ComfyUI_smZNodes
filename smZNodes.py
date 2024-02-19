@@ -560,15 +560,20 @@ class TorchHijack:
     def randn_like(self, x):
         return randn_without_seed(x, generator=self.generator, randn_source=self.randn_source)
 
-def _find_outer_instance(target, target_type):
+def _find_outer_instance(target:str, target_type=None, callback=None):
     import inspect
     frame = inspect.currentframe()
-    while frame:
+    i = 0
+    while frame and i < 10:
         if target in frame.f_locals:
-            found = frame.f_locals[target]
-            if isinstance(found, target_type): # and found != 1: # steps == 1
-                return found
+            if callback is not None:
+                return callback(frame)
+            else:
+                found = frame.f_locals[target]
+                if isinstance(found, target_type):
+                    return found
         frame = frame.f_back
+        i += 1
     return None
 
 if hasattr(comfy.model_patcher, 'ModelPatcher'):
@@ -959,6 +964,8 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         self.is_prompt_editing_u = True
         self.use_CFGDenoiser = None
         self.opts = None
+        self.sampler = None
+        self.steps_multiplier = 1
 
 
     def apply_model(self, *args, **kwargs):
@@ -985,12 +992,12 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         # uncond = self.init_uncond
 
         if self.is_prompt_editing_c:
-            cc, ccp=get_cond(cond, self.step)
+            cc, ccp=get_cond(cond, self.step // self.steps_multiplier)
             self.is_prompt_editing_c=ccp
         else: cc = cond
 
         if self.is_prompt_editing_u:
-            uu, uup=get_cond(uncond, self.step)
+            uu, uup=get_cond(uncond, self.step // self.steps_multiplier)
             self.is_prompt_editing_u=uup
         else: uu = uncond
 
@@ -1011,6 +1018,16 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         if self.is_prompt_editing_u:
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else: args[3]=uu
+
+        if (self.is_prompt_editing_c or self.is_prompt_editing_u) and not self.sampler:
+            def get_sampler(frame):
+                return frame.f_code.co_name
+            self.sampler = _find_outer_instance('extra_args', callback=get_sampler) or 'unknown'
+            second_order_samplers = ["dpmpp_2s", "dpmpp_sde", "dpm_2", "heun"]
+            # heunpp2 can be first, second, or third order
+            third_order_samplers = ["heunpp2"]
+            self.steps_multiplier = 2 if any(map(self.sampler.__contains__, second_order_samplers)) else self.steps_multiplier
+            self.steps_multiplier = 3 if any(map(self.sampler.__contains__, third_order_samplers)) else self.steps_multiplier
 
         if self.use_CFGDenoiser is None:
             multi_cc = (any([getp(p)['smZ_opts'].multi_conditioning if 'smZ_opts' in getp(p) else False for p in cc]) and len(cc) > 1)

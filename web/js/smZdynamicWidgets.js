@@ -87,7 +87,7 @@ export function getGroupNodeConfig(node) {
 export function widgetLogic(node, widget) {
     const wname = widget.name
     if (wname.endsWith("parser")) {
-        const in_comfy = widget.value.includes("comfy")
+        const in_comfy = widget?.value?.includes?.("comfy")
         toggleMenuOption(node, ['multi_conditioning', wname], !in_comfy)
         toggleMenuOption(node, ['mean_normalization', wname], widget.value !== "comfy")
         const uoei = 'use_old_emphasis_implementation'
@@ -221,7 +221,7 @@ function widgetLogicSettings(node) {
 
     const index = node.index || 0
     
-    const extra = node.widgets.find(w => w.name === 'extra')
+    const extra = node.widgets.find(w => w.name.endsWith('extra'))
     let extra_data = extra._value
     toggleMenuOption(node, extra.name, false)
     const condition = (sup) => node.outputs?.[index] && (node.outputs[index].name === sup || node.outputs[index].type === sup) || 
@@ -494,10 +494,8 @@ _app.registerExtension({
                 let inputNode = null;
                 while (currentNode) {
                     updateNodes.unshift(currentNode);
-                    
-                    if (currentNode?.inputs?.[index]?.link) {
-                        const linkId = currentNode.inputs[index].link;
-                        // console.log('===  currentNode.inputs[0]',currentNode.inputs[0])
+                    const linkId = currentNode?.inputs?.[index]?.link;
+                    if (linkId) {
                         const link = app.graph.links[linkId];
                         if (!link) return;
                         const node = app.graph.getNodeById(link.origin_id);
@@ -660,14 +658,14 @@ _app.registerExtension({
                     if(hiddenWidgets.length !== node.widgets.length) {
                         customOptions.push(null) // seperator
                         const d=function(_node) {
-                            const extra = _node.widgets.find(w=>w.name==='extra')
+                            const extra = _node.widgets.find(w => w.name.endsWith('extra'))
                             let extra_data = extra._value
                             // extra_data.show_descriptions = !extra_data.show_descriptions
                             extra._value = {...extra._value, show_descriptions: !extra_data.show_descriptions}
                             widgetLogicSettings(_node)
                         }
                         const h=function(_node) {
-                            const extra = _node.widgets.find(w=>w.name==='extra')
+                            const extra = _node.widgets.find(w => w.name.endsWith('extra'))
                             let extra_data = extra._value
                             extra._value = {...extra._value, show_headings: !extra_data.show_headings}
                             // extra_data.show_headings = !extra_data.show_headings
@@ -684,17 +682,17 @@ _app.registerExtension({
                     // const whWidgets = node.widgets.filter(w => w.name === 'width' || w.name === 'height')
                     const hiddenWidgets = node.widgets.filter(w => w.type === HIDDEN_TAG)
                     // doesn't take GroupNode into account
-                    const with_SDXL = node.widgets.find(w => w.name === 'with_SDXL')
-                    const parser = node.widgets.find(w => w.name === 'parser')
-                    const in_comfy = parser.value.includes("comfy")
+                    // const with_SDXL = node.widgets.find(w => w.name.endsWith('with_SDXL'))
+                    const parser = node.widgets.find(w => w.name.endsWith('parser'))
+                    const in_comfy = parser?.value?.includes?.("comfy")
                     let ws = widgets.map(widget_name => create_custom_option(content_hide_show + widget_name, toggleMenuOption.bind(this, node, widget_name)))
                     ws = ws.filter((w) => (in_comfy && parser.value !== 'comfy' && w.content.includes('mean_normalization')) || (in_comfy && w.content.includes('with_SDXL')) || !in_comfy )
                     // customOptions.push(null) // seperator
                     customOptions.push(...ws)
 
                     let wo = options.filter(o => o === null || (o && !hiddenWidgets.some(w => o.content.includes(`Convert ${w.name} to input`))))
-                    const width = node.widgets.find(w => w.name === 'width')
-                    const height = node.widgets.find(w => w.name === 'height')
+                    const width = node.widgets.find(w => w.name.endsWith('width'))
+                    const height = node.widgets.find(w => w.name.endsWith('height'))
                     if (width && height) {
                         const width_type = width.type.toLowerCase()
                         const height_type = height.type.toLowerCase()

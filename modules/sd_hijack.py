@@ -125,6 +125,8 @@ class StableDiffusionModelHijack:
         m = FrozenOpenCLIPEmbedder2WithCustomWordsCustom(m, self) if "SDXLClipG" in type(m).__name__ else FrozenCLIPEmbedderWithCustomWordsCustom(m, self)
         m.clip_layer = getattr(m.wrapped, "clip_layer", None)
         m.reset_clip_layer = getattr(m.wrapped, "reset_clip_layer", None)
+        m.set_clip_options = getattr(m.wrapped, "set_clip_options", None)
+        m.reset_clip_options = getattr(m.wrapped, "reset_clip_options", None)
         m.transformer = getattr(m.wrapped, "transformer", None)
         self.cond_stage_model = m
         self.clip = m

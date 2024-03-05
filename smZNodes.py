@@ -5,7 +5,7 @@ from typing import List, Tuple
 from functools import partial
 from .modules import prompt_parser, shared, devices
 from .modules.shared import opts, opts_default
-from .modules.sd_samplers_cfg_denoiser import CFGDenoiser, ReturnEarly
+from .modules.sd_samplers_cfg_denoiser import CFGDenoiser
 from .modules.sd_hijack_clip import FrozenCLIPEmbedderForSDXLWithCustomWords
 from .modules.sd_hijack_open_clip import FrozenOpenCLIPEmbedder2WithCustomWords
 from .modules.textual_inversion.textual_inversion import Embedding
@@ -13,7 +13,7 @@ import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
 import comfy.utils
-from comfy.sd1_clip import SD1Tokenizer, unescape_important, escape_important, token_weights, expand_directory_list
+from comfy.sd1_clip import unescape_important, escape_important, token_weights, expand_directory_list
 from nodes import CLIPTextEncode
 from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from comfy.sample import np
@@ -1326,6 +1326,128 @@ def inject_code(original_func, data):
     # Return the modified function
     return modified_function
 
+
+# ========================================================================
+# Hijack sampling
+
+payload = [{
+    "target_line": 'extra_args["denoise_mask"] = denoise_mask',
+    "code_to_insert": """
+            if (any([_p[1].get('from_smZ', False) for _p in positive]) or 
+                any([_p[1].get('from_smZ', False) for _p in negative])):
+                from ComfyUI_smZNodes.modules.shared import opts as smZ_opts
+                if not smZ_opts.sgm_noise_multiplier: max_denoise = False
+"""
+},
+{
+    "target_line": 'positive = positive[:]',
+    "code_to_insert": """
+        if hasattr(self, 'model_denoise'): self.model_denoise.step = start_step if start_step != None else 0
+"""
+},
+]
+
+def hook_for_settings_node_and_sampling():
+    if not hasattr(comfy.samplers, 'Sampler'):
+        print(f"[smZNodes]: Your ComfyUI version is outdated. Please update to the latest version.")
+        comfy.samplers.KSampler.sample = inject_code(comfy.samplers.KSampler.sample, payload)
+    else:
+        _KSampler_sample = comfy.samplers.KSampler.sample
+        _Sampler = comfy.samplers.Sampler
+        _max_denoise = comfy.samplers.Sampler.max_denoise
+        _sample = comfy.samplers.sample
+        _wrap_model = comfy.samplers.wrap_model
+
+        def get_value_from_args(args, kwargs, key_to_lookup, fn, idx=None):
+            value = None
+            if key_to_lookup in kwargs:
+                value = kwargs[key_to_lookup]
+            else:
+                try:
+                    # Get its position in the formal parameters list and retrieve from args
+                    arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+                    index = arg_names.index(key_to_lookup)
+                    value = args[index] if index < len(args) else None
+                except Exception as err:
+                    if idx is not None and idx < len(args):
+                        value = args[idx]
+            return value
+
+        def KSampler_sample(*args, **kwargs):
+            start_step = get_value_from_args(args, kwargs, 'start_step', _KSampler_sample)
+            if isinstance(start_step, int):
+                args[0].model.start_step = start_step
+            return _KSampler_sample(*args, **kwargs)
+
+        def sample(*args, **kwargs):
+            model = get_value_from_args(args, kwargs, 'model', _sample, 0)
+            # positive = get_value_from_args(args, kwargs, 'positive', _sample, 2)
+            # negative = get_value_from_args(args, kwargs, 'negative', _sample, 3)
+            sampler = get_value_from_args(args, kwargs, 'sampler', _sample, 6)
+            model_options = get_value_from_args(args, kwargs, 'model_options', _sample, 8)
+            start_step = getattr(model, 'start_step', None)
+            if 'smZ_opts' in model_options:
+                model_options['smZ_opts'].start_step = start_step
+                opts = model_options['smZ_opts']
+                if hasattr(sampler, 'sampler_function'):
+                    if not hasattr(sampler, 'sampler_function_orig'):
+                        sampler.sampler_function_orig = sampler.sampler_function
+                    sampler_function_sig_params = inspect.signature(sampler.sampler_function).parameters
+                    params = {x: getattr(opts, x)  for x in ['eta', 's_churn', 's_tmin', 's_tmax', 's_noise'] if x in sampler_function_sig_params}
+                    sampler.sampler_function = lambda *a, **kw: sampler.sampler_function_orig(*a, **{**kw, **params})
+            model.model_options = model_options # Add model_options to CFGNoisePredictor
+            return _sample(*args, **kwargs)
+
+        class Sampler(_Sampler):
+            def max_denoise(self, model_wrap: CFGNoisePredictor, sigmas):
+                base_model = model_wrap.inner_model
+                res = _max_denoise(self, model_wrap, sigmas)
+                if (model_options:=base_model.model_options) is not None:
+                    if 'smZ_opts' in model_options:
+                        opts = model_options['smZ_opts']
+                        if getattr(opts, 'start_step', None) is not None:
+                            model_wrap.step = opts.start_step
+                            opts.start_step = None
+                        if not opts.sgm_noise_multiplier:
+                            res = False
+                return res
+
+        comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
+        comfy.samplers.KSampler.sample = KSampler_sample
+        comfy.samplers.sample = sample
+    comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
+
+def hook_for_rng_orig():
+    if not hasattr(comfy.sample, 'prepare_noise_orig'):
+        comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
+
+def hook_for_dtype_unet():
+    if hasattr(comfy.model_management, 'unet_dtype'):
+        if not hasattr(comfy.model_management, 'unet_dtype_orig'):
+            comfy.model_management.unet_dtype_orig = comfy.model_management.unet_dtype
+        from .modules import devices
+        def unet_dtype(device=None, model_params=0, *args, **kwargs):
+            dtype = comfy.model_management.unet_dtype_orig(device=device, model_params=model_params, *args, **kwargs)
+            if model_params != 0:
+                devices.dtype_unet = dtype
+            return dtype
+        comfy.model_management.unet_dtype = unet_dtype
+
+def try_hook(fn):
+    try:
+        fn()
+    except Exception as e:
+        print("\033[92m[smZNodes] \033[0;33mWARNING:\033[0m", e)
+
+def register_hooks():
+    hooks = [
+        hook_for_settings_node_and_sampling,
+        hook_for_rng_orig,
+        hook_for_dtype_unet,
+    ]
+    for hook in hooks:
+        try_hook(hook)
+
 # ========================================================================
 
 # DPM++ 2M alt
@@ -1368,5 +1490,11 @@ def add_sample_dpmpp_2m_alt():
             setattr(k_diffusion_sampling, 'sample_dpmpp_2m_alt', sample_dpmpp_2m_alt)
             import importlib
             importlib.reload(k_diffusion_sampling)
-        except ValueError as err:
-            pass
+        except ValueError as e: ...
+
+def add_custom_samplers():
+    samplers = [
+        add_sample_dpmpp_2m_alt,
+    ]
+    for add_sampler in samplers:
+        add_sampler()

@@ -3,23 +3,20 @@ import comfy
 import comfy.sd1_clip
 from torch.nn.functional import silu
 from types import MethodType
-from comfy.sd import CLIP
-from comfy import ldm
-import ldm.modules.diffusionmodules
-import ldm.modules.diffusionmodules.model
-import ldm.modules.diffusionmodules.openaimodel
-import ldm.modules.attention
+import comfy.ldm.modules.diffusionmodules
+import comfy.ldm.modules.diffusionmodules.model
+import comfy.ldm.modules.diffusionmodules.openaimodel
+import comfy.ldm.modules.attention
 from . import devices, shared, sd_hijack_unet, sd_hijack_optimizations, script_callbacks, errors
 from .textual_inversion import textual_inversion
 from ..smZNodes import FrozenCLIPEmbedderWithCustomWordsCustom, FrozenOpenCLIPEmbedder2WithCustomWordsCustom, get_learned_conditioning
-from functools import partial
-if not hasattr(ldm.modules.diffusionmodules.model, "nonlinearity_orig"):
-    ldm.modules.diffusionmodules.model.nonlinearity_orig = ldm.modules.diffusionmodules.model.nonlinearity
-if not hasattr(ldm.modules.diffusionmodules.openaimodel, "th_orig"):
-    ldm.modules.diffusionmodules.openaimodel.th_orig = ldm.modules.diffusionmodules.openaimodel.th
+if not hasattr(comfy.ldm.modules.diffusionmodules.model, "nonlinearity_orig"):
+    comfy.ldm.modules.diffusionmodules.model.nonlinearity_orig = comfy.ldm.modules.diffusionmodules.model.nonlinearity
+if not hasattr(comfy.ldm.modules.diffusionmodules.openaimodel, "th_orig"):
+    comfy.ldm.modules.diffusionmodules.openaimodel.th_orig = comfy.ldm.modules.diffusionmodules.openaimodel.th
 
-ldm.modules.attention.CrossAttention.forward_orig = ldm.modules.attention.CrossAttention.forward
-ldm.modules.diffusionmodules.model.AttnBlock.forward_orig = ldm.modules.diffusionmodules.model.AttnBlock.forward
+comfy.ldm.modules.attention.CrossAttention.forward_orig = comfy.ldm.modules.attention.CrossAttention.forward
+comfy.ldm.modules.diffusionmodules.model.AttnBlock.forward_orig = comfy.ldm.modules.diffusionmodules.model.AttnBlock.forward
 
 optimizers = []
 current_optimizer: sd_hijack_optimizations.SdOptimization = None
@@ -51,8 +48,8 @@ def apply_optimizations(option=None):
         current_optimizer = None
         return ''
 
-    ldm.modules.diffusionmodules.model.nonlinearity = silu
-    ldm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
+    comfy.ldm.modules.diffusionmodules.model.nonlinearity = silu
+    comfy.ldm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
 
     # sgm.modules.diffusionmodules.model.nonlinearity = silu
     # sgm.modules.diffusionmodules.openaimodel.th = sd_hijack_unet.th
@@ -89,8 +86,8 @@ def apply_optimizations(option=None):
 
 def undo_optimizations():
     sd_hijack_optimizations.undo()
-    ldm.modules.diffusionmodules.model.nonlinearity = ldm.modules.diffusionmodules.model.nonlinearity_orig
-    ldm.modules.diffusionmodules.openaimodel.th = ldm.modules.diffusionmodules.openaimodel.th_orig
+    comfy.ldm.modules.diffusionmodules.model.nonlinearity = comfy.ldm.modules.diffusionmodules.model.nonlinearity_orig
+    comfy.ldm.modules.diffusionmodules.openaimodel.th = comfy.ldm.modules.diffusionmodules.openaimodel.th_orig
 
 class StableDiffusionModelHijack:
     fixes = None

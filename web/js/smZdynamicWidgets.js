@@ -1,4 +1,4 @@
-import { app as _app } from "/scripts/app.js";
+import { app as _app } from "../../../scripts/app.js";
 import { mergeIfValid, getWidgetConfig, setWidgetConfig } from "/extensions/core/widgetInputs.js";
 // import { ComfyWidgets } from "/scripts/widgets.js";
 

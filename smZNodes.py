@@ -951,12 +951,15 @@ def get_cond(c, current_step, reverse=False):
         return (result, prompt_editing)
     return (_cond, prompt_editing)
 
-CFGNoisePredictorOrig = comfy.samplers.CFGNoisePredictor
-class CFGNoisePredictor(CFGNoisePredictorOrig):
+try:
+    CFGGuiderOrig = comfy.samplers.CFGGuider
+except Exception:
+    CFGGuiderOrig = comfy.samplers.CFGNoisePredictor
+class CFGGuider(CFGGuiderOrig):
     def __init__(self, model):
+        self.conds = {}
         super().__init__(model)
         self.step = 0
-        self.inner_model2 = CFGDenoiser(self.inner_model.apply_model)
         self.c_adm = None
         self.init_cond = None
         self.init_uncond = None
@@ -967,13 +970,17 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         self.sampler = None
         self.steps_multiplier = 1
 
+    def predict_noise(self, *args, **kwargs):
+        return self.apply_model(*args, **kwargs)
 
     def apply_model(self, *args, **kwargs):
+        if not hasattr(self, 'inner_model2'):
+            self.inner_model2 = CFGDenoiser(self.inner_model.apply_model)
         x=kwargs['x'] if 'x' in kwargs else args[0]
         timestep=kwargs['timestep'] if 'timestep' in kwargs else args[1]
-        cond=kwargs['cond'] if 'cond' in kwargs else args[2]
-        uncond=kwargs['uncond'] if 'uncond' in kwargs else args[3]
-        cond_scale=kwargs['cond_scale'] if 'cond_scale' in kwargs else args[4]
+        cond=kwargs['cond'] if 'cond' in kwargs else (positive if (positive:=self.conds.get("positive", None)) is not None else args[2])
+        uncond=kwargs['uncond'] if 'uncond' in kwargs else (negative if (negative:=self.conds.get("negative", None)) is not None else args[3])
+        cond_scale=self.cfg if hasattr(self, 'cfg') else (kwargs['cond_scale'] if 'cond_scale' in kwargs else args[4])
         model_options=kwargs['model_options'] if 'model_options' in kwargs else {}
 
         # reverse doesn't work for some reason???
@@ -1000,6 +1007,7 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             uu, uup=get_cond(uncond, self.step // self.steps_multiplier)
             self.is_prompt_editing_u=uup
         else: uu = uncond
+        self.step += 1
 
         if 'transformer_options' not in model_options:
             model_options['transformer_options'] = {}
@@ -1009,15 +1017,29 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
             model_options['transformer_options']['from_smZ'] = True
 
         if not model_options['transformer_options'].get('from_smZ', False):
-            out = super().apply_model(*args, **kwargs)
+            if hasattr(self, 'predict_noise'):
+                out = super().predict_noise(*args, **kwargs)
+            else:
+                out = super().apply_model(*args, **kwargs)
             return out
 
         if self.is_prompt_editing_c:
             if 'cond' in kwargs: kwargs['cond'] = cc
-            else: args[2]=cc
+            else: 
+                if hasattr(self, 'conds'):
+                    cbackup = self.conds['positive']
+                    self.conds['positive'] = cc
+                    # print(self.conds['positive'])
+                else:
+                    args[2]=cc
         if self.is_prompt_editing_u:
             if 'uncond' in kwargs: kwargs['uncond'] = uu
-            else: args[3]=uu
+            else:
+                if hasattr(self, 'conds'):
+                    ubackup = self.conds['negative']
+                    self.conds['negative'] = uu
+                else:
+                    args[3]=uu
 
         if (self.is_prompt_editing_c or self.is_prompt_editing_u) and not self.sampler:
             def get_sampler(frame):
@@ -1059,15 +1081,31 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
         if len(cc) != 1 and any(['smZid' in ic for ic in cond]):
             cc = list(reversed(cc))
             if 'cond' in kwargs: kwargs['cond'] = cc
-            else: args[2]=cc
+            else:
+                if hasattr(self, 'conds'):
+                    self.conds['positive'] = cc
+                else:
+                    args[2]=cc
         if len(uu) != 1 and any(['smZid' in ic for ic in uncond]):
             uu = list(reversed(uu))
             if 'uncond' in kwargs: kwargs['uncond'] = uu
-            else: args[3]=uu
+            else:
+                if hasattr(self, 'conds'):
+                    self.conds['negative'] = uu
+                else:
+                    args[3]=uu
         
         if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options
-            out = super().apply_model(*args, **kwargs)
+            if hasattr(self, 'predict_noise'):
+                out = super().predict_noise(*args, **kwargs)
+            else:
+                out = super().apply_model(*args, **kwargs)
+            if hasattr(self, 'conds'):
+                if self.is_prompt_editing_c:
+                    self.conds['positive'] = cbackup
+                if self.is_prompt_editing_u:
+                    self.conds['negative'] = ubackup
         else:
             self.inner_model2.x_in = x
             self.inner_model2.sigma = timestep
@@ -1091,7 +1129,6 @@ class CFGNoisePredictor(CFGNoisePredictorOrig):
                 out = sampling_function(self.inner_model, *args, **kwargs)
             else:
                 out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.inner_model2.s_min_uncond, image_cond=image_cond)
-        self.step += 1
         return out
 
 
@@ -1356,7 +1393,6 @@ def hook_for_settings_node_and_sampling():
         _Sampler = comfy.samplers.Sampler
         _max_denoise = comfy.samplers.Sampler.max_denoise
         _sample = comfy.samplers.sample
-        _wrap_model = comfy.samplers.wrap_model
 
         def get_value_from_args(args, kwargs, key_to_lookup, fn, idx=None):
             value = None
@@ -1395,14 +1431,21 @@ def hook_for_settings_node_and_sampling():
                     sampler_function_sig_params = inspect.signature(sampler.sampler_function).parameters
                     params = {x: getattr(opts, x)  for x in ['eta', 's_churn', 's_tmin', 's_tmax', 's_noise'] if x in sampler_function_sig_params}
                     sampler.sampler_function = lambda *a, **kw: sampler.sampler_function_orig(*a, **{**kw, **params})
-            model.model_options = model_options # Add model_options to CFGNoisePredictor
+            # Add model_options to CFGGuider
+            if hasattr(model, 'model_options') and model.model_options is dict:
+                model.model_options.update(model_options)
+            else:
+                model.model_options = model_options
             return _sample(*args, **kwargs)
 
         class Sampler(_Sampler):
-            def max_denoise(self, model_wrap: CFGNoisePredictor, sigmas):
+            def max_denoise(self, model_wrap: CFGGuider, sigmas):
                 base_model = model_wrap.inner_model
                 res = _max_denoise(self, model_wrap, sigmas)
-                if (model_options:=base_model.model_options) is not None:
+                model_options = getattr(model_wrap, 'model_options', None)
+                if model_options is None:
+                    model_options = base_model.model_options
+                if model_options is not None:
                     if 'smZ_opts' in model_options:
                         opts = model_options['smZ_opts']
                         if getattr(opts, 'start_step', None) is not None:
@@ -1415,7 +1458,10 @@ def hook_for_settings_node_and_sampling():
         comfy.samplers.Sampler.max_denoise = Sampler.max_denoise
         comfy.samplers.KSampler.sample = KSampler_sample
         comfy.samplers.sample = sample
-    comfy.samplers.CFGNoisePredictor = CFGNoisePredictor
+    if hasattr(comfy.samplers, 'CFGGuider'):
+        comfy.samplers.CFGGuider = CFGGuider
+    elif hasattr(comfy.samplers, 'CFGNoisePredictor'):
+        comfy.samplers.CFGNoisePredictor = CFGGuider
 
 def hook_for_rng_orig():
     if not hasattr(comfy.sample, 'prepare_noise_orig'):

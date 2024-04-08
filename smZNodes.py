@@ -1017,25 +1017,25 @@ class CFGGuider(CFGGuiderOrig):
             model_options['transformer_options']['from_smZ'] = True
 
         if not model_options['transformer_options'].get('from_smZ', False):
-            if hasattr(self, 'predict_noise'):
-                out = super().predict_noise(*args, **kwargs)
+            sup = super()
+            if hasattr(sup, 'predict_noise'):
+                out = sup.predict_noise(*args, **kwargs)
             else:
-                out = super().apply_model(*args, **kwargs)
+                out = sup.apply_model(*args, **kwargs)
             return out
 
         if self.is_prompt_editing_c:
             if 'cond' in kwargs: kwargs['cond'] = cc
             else: 
-                if hasattr(self, 'conds'):
+                if hasattr(self, 'conds') and self.conds:
                     cbackup = self.conds['positive']
                     self.conds['positive'] = cc
-                    # print(self.conds['positive'])
                 else:
                     args[2]=cc
         if self.is_prompt_editing_u:
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else:
-                if hasattr(self, 'conds'):
+                if hasattr(self, 'conds') and self.conds:
                     ubackup = self.conds['negative']
                     self.conds['negative'] = uu
                 else:
@@ -1082,7 +1082,7 @@ class CFGGuider(CFGGuiderOrig):
             cc = list(reversed(cc))
             if 'cond' in kwargs: kwargs['cond'] = cc
             else:
-                if hasattr(self, 'conds'):
+                if hasattr(self, 'conds') and self.conds:
                     self.conds['positive'] = cc
                 else:
                     args[2]=cc
@@ -1090,18 +1090,19 @@ class CFGGuider(CFGGuiderOrig):
             uu = list(reversed(uu))
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else:
-                if hasattr(self, 'conds'):
+                if hasattr(self, 'conds') and self.conds:
                     self.conds['negative'] = uu
                 else:
                     args[3]=uu
         
         if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options
-            if hasattr(self, 'predict_noise'):
-                out = super().predict_noise(*args, **kwargs)
+            sup = super()
+            if hasattr(sup, 'predict_noise'):
+                out = sup.predict_noise(*args, **kwargs)
             else:
-                out = super().apply_model(*args, **kwargs)
-            if hasattr(self, 'conds'):
+                out = sup.apply_model(*args, **kwargs)
+            if hasattr(self, 'conds') and self.conds:
                 if self.is_prompt_editing_c:
                     self.conds['positive'] = cbackup
                 if self.is_prompt_editing_u:
@@ -1126,7 +1127,17 @@ class CFGGuider(CFGGuiderOrig):
             if not hasattr(self.inner_model2, 'skip_uncond'):
                 self.inner_model2.skip_uncond = math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False
             if to_comfy:
-                out = sampling_function(self.inner_model, *args, **kwargs)
+                if hasattr(self, 'conds') and self.conds:
+                    kwargs['cond'] = self.conds['positive']
+                    kwargs['uncond'] = self.conds['negative']
+                    kwargs['cond_scale'] = cond_scale
+                    out = sampling_function(self.inner_model, *args, **kwargs)
+                    if self.is_prompt_editing_c:
+                        self.conds['positive'] = cbackup
+                    if self.is_prompt_editing_u:
+                        self.conds['negative'] = ubackup
+                else:
+                    out = sampling_function(self.inner_model, *args, **kwargs)
             else:
                 out = self.inner_model2(x, timestep, cond=_cc, uncond=_uu, cond_scale=cond_scale, s_min_uncond=self.inner_model2.s_min_uncond, image_cond=image_cond)
         return out

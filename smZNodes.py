@@ -1027,7 +1027,7 @@ class CFGGuider(CFGGuiderOrig):
         if self.is_prompt_editing_c:
             if 'cond' in kwargs: kwargs['cond'] = cc
             else: 
-                if hasattr(self, 'conds') and self.conds:
+                if self.conds:
                     cbackup = self.conds['positive']
                     self.conds['positive'] = cc
                 else:
@@ -1035,7 +1035,7 @@ class CFGGuider(CFGGuiderOrig):
         if self.is_prompt_editing_u:
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else:
-                if hasattr(self, 'conds') and self.conds:
+                if self.conds:
                     ubackup = self.conds['negative']
                     self.conds['negative'] = uu
                 else:
@@ -1082,7 +1082,7 @@ class CFGGuider(CFGGuiderOrig):
             cc = list(reversed(cc))
             if 'cond' in kwargs: kwargs['cond'] = cc
             else:
-                if hasattr(self, 'conds') and self.conds:
+                if self.conds:
                     self.conds['positive'] = cc
                 else:
                     args[2]=cc
@@ -1090,7 +1090,7 @@ class CFGGuider(CFGGuiderOrig):
             uu = list(reversed(uu))
             if 'uncond' in kwargs: kwargs['uncond'] = uu
             else:
-                if hasattr(self, 'conds') and self.conds:
+                if self.conds:
                     self.conds['negative'] = uu
                 else:
                     args[3]=uu
@@ -1102,7 +1102,7 @@ class CFGGuider(CFGGuiderOrig):
                 out = sup.predict_noise(*args, **kwargs)
             else:
                 out = sup.apply_model(*args, **kwargs)
-            if hasattr(self, 'conds') and self.conds:
+            if self.conds:
                 if self.is_prompt_editing_c:
                     self.conds['positive'] = cbackup
                 if self.is_prompt_editing_u:
@@ -1127,7 +1127,7 @@ class CFGGuider(CFGGuiderOrig):
             if not hasattr(self.inner_model2, 'skip_uncond'):
                 self.inner_model2.skip_uncond = math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False
             if to_comfy:
-                if hasattr(self, 'conds') and self.conds:
+                if self.conds:
                     kwargs['cond'] = self.conds['positive']
                     kwargs['uncond'] = self.conds['negative']
                     kwargs['cond_scale'] = cond_scale

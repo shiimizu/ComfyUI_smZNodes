@@ -952,9 +952,11 @@ def get_cond(c, current_step, reverse=False):
     return (_cond, prompt_editing)
 
 try:
-    CFGGuiderOrig = comfy.samplers.CFGGuider
+    comfy.samplers.CFGGuider_orig_smz = comfy.samplers.CFGGuider
+    CFGGuiderOrig = comfy.samplers.CFGGuider_orig_smz
 except Exception:
-    CFGGuiderOrig = comfy.samplers.CFGNoisePredictor
+    comfy.samplers.CFGNoisePredictor_orig_smz = comfy.samplers.CFGNoisePredictor
+    CFGGuiderOrig = comfy.samplers.CFGNoisePredictor_orig_smz
 class CFGGuider(CFGGuiderOrig):
     def __init__(self, model):
         self.conds = {}
@@ -1017,11 +1019,10 @@ class CFGGuider(CFGGuiderOrig):
             model_options['transformer_options']['from_smZ'] = True
 
         if not model_options['transformer_options'].get('from_smZ', False):
-            sup = super()
-            if hasattr(sup, 'predict_noise'):
-                out = sup.predict_noise(*args, **kwargs)
+            if self.conds:
+                out = super().predict_noise(*args, **kwargs)
             else:
-                out = sup.apply_model(*args, **kwargs)
+                out = super().apply_model(*args, **kwargs)
             return out
 
         if self.is_prompt_editing_c:
@@ -1097,11 +1098,10 @@ class CFGGuider(CFGGuiderOrig):
         
         if not self.use_CFGDenoiser:
             kwargs['model_options'] = model_options
-            sup = super()
-            if hasattr(sup, 'predict_noise'):
-                out = sup.predict_noise(*args, **kwargs)
+            if self.conds:
+                out = super().predict_noise(*args, **kwargs)
             else:
-                out = sup.apply_model(*args, **kwargs)
+                out = super().apply_model(*args, **kwargs)
             if self.conds:
                 if self.is_prompt_editing_c:
                     self.conds['positive'] = cbackup

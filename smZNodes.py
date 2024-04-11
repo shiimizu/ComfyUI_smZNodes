@@ -952,11 +952,9 @@ def get_cond(c, current_step, reverse=False):
     return (_cond, prompt_editing)
 
 try:
-    comfy.samplers.CFGGuider_orig_smz = comfy.samplers.CFGGuider
-    CFGGuiderOrig = comfy.samplers.CFGGuider_orig_smz
+    CFGGuiderOrig = comfy.samplers.CFGGuider_orig_smz = comfy.samplers.CFGGuider
 except Exception:
-    comfy.samplers.CFGNoisePredictor_orig_smz = comfy.samplers.CFGNoisePredictor
-    CFGGuiderOrig = comfy.samplers.CFGNoisePredictor_orig_smz
+    CFGGuiderOrig = comfy.samplers.CFGGuider_orig_smz = comfy.samplers.CFGNoisePredictor
 class CFGGuider(CFGGuiderOrig):
     def __init__(self, model):
         self.conds = {}
@@ -972,10 +970,13 @@ class CFGGuider(CFGGuiderOrig):
         self.sampler = None
         self.steps_multiplier = 1
 
-    def predict_noise(self, *args, **kwargs):
-        return self.apply_model(*args, **kwargs)
+    def __call__(self, *args, **kwargs):
+        return self.predict_noise(*args, **kwargs)
 
     def apply_model(self, *args, **kwargs):
+        return self.predict_noise(*args, **kwargs)
+
+    def predict_noise(self, *args, **kwargs):
         if not hasattr(self, 'inner_model2'):
             self.inner_model2 = CFGDenoiser(self.inner_model.apply_model)
         x=kwargs['x'] if 'x' in kwargs else args[0]

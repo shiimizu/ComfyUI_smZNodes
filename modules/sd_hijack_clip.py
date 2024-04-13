@@ -264,27 +264,32 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         bm = batch_multipliers.reshape(batch_multipliers.shape + (1,)).expand(z.shape)
         if opts.prompt_mean_norm:
             batch_multipliers_solo_emb = torch.asarray(batch_multipliers_solo_emb).to(devices.device)
-            z_bak = z
             original_mean = z.mean()
-            z = z * bm
-            new_mean = z.mean()
-            _mean = original_mean / new_mean
+            zk = z * torch.abs(bm)
+            zv = z * bm
+            _mean_k, _mean_v = original_mean / zk.mean(), original_mean / zv.mean()
             validate = lambda x: x > 0.6 and x < 1.6
-            if validate(_mean):
-                z = z * _mean
+            if validate(_mean_k) and validate(_mean_v):
+                zk = zk * _mean_k
+                zv = zv * _mean_v
             else:
                 # Try again with bm_solo_emb
                 bm_solo_emb = batch_multipliers_solo_emb.reshape(batch_multipliers_solo_emb.shape + (1,)).expand(z.shape)
-                original_mean = z.mean()
-                z = z * bm_solo_emb
-                new_mean = z.mean()
-                _mean = original_mean / new_mean
-                if validate(_mean):
-                    z = z * _mean
+                original_mean_k, original_mean_v = zk.mean(), zv.mean()
+                zk = zk * torch.abs(bm_solo_emb)
+                zv = zv * bm_solo_emb
+                _mean_k, _mean_v = original_mean_k / zk.mean(), original_mean_v / zv.mean()
+                if validate(_mean_k) and validate(_mean_v):
+                    zk = zk * _mean_k
+                    zv = zv * _mean_v
                 else:
-                    z = z_bak * (bm / bm_solo_emb.mean())
+                    zk = z * torch.abs(bm / bm_solo_emb.mean())
+                    zv = z * (bm / bm_solo_emb.mean())
         else:
-            z = z * bm
+            zk = z * torch.abs(bm)
+            zv = z * bm
+
+        z = torch.cat((zk,zv), -1).view(zk.shape[0], -1, zk.shape[2])
         z.pooled = pooled
         return z
 

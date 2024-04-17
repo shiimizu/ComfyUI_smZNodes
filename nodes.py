@@ -31,7 +31,7 @@ class smZ_CLIPTextEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "text": ("STRING", {"multiline": True}),
+                "text": ("STRING", {"multiline": True, "dynamicPrompts": True}),
                 "clip": ("CLIP", ),
                 "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
                 # whether weights are normalized by taking the mean
@@ -46,8 +46,8 @@ class smZ_CLIPTextEncode:
                 "crop_h": ("INT", {"default": 0, "min": 0, "max": MAX_RESOLUTION}),
                 "target_width": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
                 "target_height": ("INT", {"default": 1024.0, "min": 0, "max": MAX_RESOLUTION}),
-                "text_g": ("STRING", {"multiline": True, "placeholder": "CLIP_G"}), 
-                "text_l": ("STRING", {"multiline": True, "placeholder": "CLIP_L"}),
+                "text_g": ("STRING", {"multiline": True, "placeholder": "CLIP_G", "dynamicPrompts": True}), 
+                "text_l": ("STRING", {"multiline": True, "placeholder": "CLIP_L", "dynamicPrompts": True}),
             },
             "optional": {
                 "smZ_steps": ("INT", {"default": 1, "min": 1, "max": 0xffffffffffffffff}),

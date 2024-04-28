@@ -1531,6 +1531,10 @@ def hook_for_negpip_clip():
 
         # Copied from https://github.com/laksjdjf/cd-tuner_negpip-ComfyUI/blob/938b838546cf774dc8841000996552cef52cccf3/negpip.py#L43
         def encode_token_weights(_self, token_weight_pairs):
+            # Stable Cascade doesn't support model patching (and therefore negpip) yet
+            if isinstance(_self, comfy.sdxl_clip.StableCascadeClipG):
+                return comfy.sd1_clip.ClipTokenWeightEncoder.encode_token_weights_orig(_self, token_weight_pairs)
+
             to_encode = list()
             max_token_len = 0
             has_weights = False

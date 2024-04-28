@@ -5,7 +5,7 @@ import torch
 from . import prompt_parser, devices, sd_hijack
 from .shared import opts
 from comfy.sd1_clip import SD1ClipModel
-from comfy.sdxl_clip import SDXLClipModel
+from comfy.sdxl_clip import SDXLClipModel, StableCascadeClipG
 
 class PromptChunk:
     """
@@ -289,7 +289,8 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
             zk = z * torch.abs(bm)
             zv = z * bm
 
-        z = torch.cat((zk,zv), -1).view(zk.shape[0], -1, zk.shape[2])
+        # Stable Cascade doesn't support model patching (and therefore negpip) yet
+        z = torch.cat((zk,zv), -1).view(zk.shape[0], -1, zk.shape[2]) if not isinstance(self.wrapped, StableCascadeClipG) else zv
         z.pooled = pooled
         return z
 

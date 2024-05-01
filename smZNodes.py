@@ -362,8 +362,7 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
         found=False
         ext = ext if (ext:=match.group(4)) else ''
         embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
-        embedding_name_escaped = embedding_sname + ext
-        embedding_name = unescape_important(embedding_name_escaped)
+        embedding_name = unescape_important(embedding_sname) + ext
         if embedding_name:
             embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
             if embed is not None:
@@ -372,9 +371,9 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                     print(f'[smZNodes] using embedding:{embedding_name}')
                 if embed.device != devices.device:
                     embed = embed.to(device=devices.device)
-                if embedding_name_escaped not in embeddings:
-                    embeddings[embedding_name_escaped] = {}
-                embeddings[embedding_name_escaped][clip_key] = embed
+                if embedding_sname not in embeddings:
+                    embeddings[embedding_sname] = {}
+                embeddings[embedding_sname][clip_key] = embed
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
     # comfyui trims non-existent embedding_names while a1111 doesn't

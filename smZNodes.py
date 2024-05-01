@@ -347,12 +347,13 @@ def get_valid_embeddings(embedding_directory):
 
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):
     from  builtins import any as b_any
+    text_ = escape_important(text)
     embedding_directory = self.wrapped.tokenizer_parent.embedding_directory
     embs = get_valid_embeddings(embedding_directory)
-    embs_str = '|'.join(embs)
+    embs_str = escape_important('|'.join(embs))
     emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
-    matches = emb_re.finditer(text)
+    matches = emb_re.finditer(text_)
     clip_key = "clip_g" if "SDXLClipG" in type(self.wrapped).__name__ else "clip_l"
     if not getattr(self.hijack.embedding_db, 'embeddings', None):
         self.hijack.embedding_db.embeddings = {}
@@ -361,7 +362,8 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
         found=False
         ext = ext if (ext:=match.group(4)) else ''
         embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
-        embedding_name = embedding_sname + ext
+        embedding_name_escaped = embedding_sname + ext
+        embedding_name = unescape_important(embedding_name_escaped)
         if embedding_name:
             embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
             if embed is not None:
@@ -370,12 +372,13 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                     print(f'[smZNodes] using embedding:{embedding_name}')
                 if embed.device != devices.device:
                     embed = embed.to(device=devices.device)
-                if embedding_sname not in embeddings:
-                    embeddings[embedding_sname] = {}
-                embeddings[embedding_sname][clip_key] = embed
+                if embedding_name_escaped not in embeddings:
+                    embeddings[embedding_name_escaped] = {}
+                embeddings[embedding_name_escaped][clip_key] = embed
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-    out = emb_re.sub(r"\2\5\6", text)
+    # comfyui trims non-existent embedding_names while a1111 doesn't
+    out = emb_re.sub(r"\2\5\6", text_)
     for name, data in embeddings.items():
         emb = Embedding(data, name)
         shape = sum([v.shape[-1] for v in data.values()])

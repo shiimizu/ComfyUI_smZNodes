@@ -328,21 +328,26 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
 
     return batched_tokens
 
-def get_valid_embeddings(embedding_directory):
+def get_valid_embeddings(embedding_directories):
     from  builtins import any as b_any
     exts = ['.safetensors', '.pt', '.bin']
-    if isinstance(embedding_directory, str):
-        embedding_directory = [embedding_directory]
-    embedding_directory = expand_directory_list(embedding_directory)
-    embs = []
-    for embd in embedding_directory:
-        for root, dirs, files in os.walk(embd, topdown=False):
+    if isinstance(embedding_directories, str):
+        embedding_directories = [embedding_directories]
+    embs = set()
+    for embd in embedding_directories:
+        for root, dirs, files in os.walk(embd, followlinks=True, topdown=False):
             for name in files:
                 if not b_any(x in os.path.splitext(name)[1] for x in exts): continue
                 n = os.path.basename(name)
                 for ext in exts: n=n.removesuffix(ext)
-                embs.append(re.escape(n))
-    embs.sort(key=len, reverse=True)
+                n = os.path.normpath(os.path.join(os.path.relpath(root, embd), n))
+                embs.add(re.escape(n))
+                # add its counterpart
+                if '/' in n:
+                    embs.add(re.escape(n.replace('/', '\\')))
+                elif '\\' in n: 
+                    embs.add(re.escape(n.replace('\\', '/')))
+    embs = sorted(embs, key=len, reverse=True)
     return embs
 
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):

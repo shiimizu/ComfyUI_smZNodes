@@ -266,9 +266,10 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                 end=match.end()
                 if (fragment:=word[last_end:start]):
                     leftovers.append(fragment)
-                ext = ext if (ext:=match.group(4)) else ''
-                embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
+                ext = (match.group(4) or (match.group(3) or ''))
+                embedding_sname = (match.group(2) or '').removesuffix(ext)
                 embedding_name = embedding_sname + ext
+                embedding_name = embedding_name.replace('\\', '/') if '\\' in embedding_name else embedding_name
                 if embedding_name:
                     embed, leftover = self._try_get_embedding(embedding_name)
                     if embed is None:
@@ -353,8 +354,8 @@ def get_valid_embeddings(embedding_directories):
 def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|FrozenOpenCLIPEmbedder2WithCustomWordsCustom, text: str, return_word_ids=False):
     from  builtins import any as b_any
     text_ = escape_important(text)
-    embedding_directory = self.wrapped.tokenizer_parent.embedding_directory
-    embs = get_valid_embeddings(embedding_directory)
+    embedding_directories = self.wrapped.tokenizer_parent.embedding_directory
+    embs = get_valid_embeddings(embedding_directories)
     embs_str = escape_important('|'.join(embs))
     emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
     emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
@@ -365,8 +366,12 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
     embeddings = self.hijack.embedding_db.embeddings
     for matchNum, match in enumerate(matches, start=1):
         found=False
-        ext = ext if (ext:=match.group(4)) else ''
-        embedding_sname = embedding_sname if (embedding_sname:=match.group(2)) else ''
+        ext = (match.group(4) or (match.group(3) or ''))
+        embedding_sname = (match.group(2) or '').removesuffix(ext)
+        if '\\' in embedding_sname:
+            embedding_sname_new = embedding_sname.replace('\\', '/')
+            text_ = text_.replace(embedding_sname, embedding_sname_new)
+            embedding_sname = embedding_sname_new
         embedding_name = unescape_important(embedding_sname) + ext
         if embedding_name:
             embed, _ = self.wrapped.tokenizer_parent._try_get_embedding(embedding_name)
@@ -381,8 +386,9 @@ def parse_and_register_embeddings(self: FrozenCLIPEmbedderWithCustomWordsCustom|
                 embeddings[embedding_sname][clip_key] = embed
         if not found:
             print(f"warning, embedding:{embedding_name} does not exist, ignoring")
-    # comfyui trims non-existent embedding_names while a1111 doesn't
-    out = emb_re.sub(r"\2\5\6", text_)
+    # comfyui trims non-existent embedding_names while a1111 doesn't.
+    # here we get group 2,5,6. group 2 minus its file extension.
+    out = emb_re.sub(lambda m: (m.group(2) or '').removesuffix(m.group(4) or (m.group(3) or '')) + (m.group(5) or '') + (m.group(6) or ''), text_)
     for name, data in embeddings.items():
         emb = Embedding(data, name)
         shape = sum([v.shape[-1] for v in data.values()])

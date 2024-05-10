@@ -598,8 +598,13 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     creates random noise given a latent image and a seed.
     optional arg skip can be used to skip and discard x number of noise generations for a given seed
     """
+    opts = None
     model = _find_outer_instance('model', ModelPatcher)
-    if model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None:
+    if (model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None) or opts is None:
+        import comfy.samplers
+        guider = _find_outer_instance('guider', comfy.samplers.CFGGuider)
+        model = getattr(guider, 'model_patcher', None)
+    if (model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None) or opts is None:
         import comfy.sample
         return comfy.sample.prepare_noise_orig(latent_image, seed, noise_inds)
 

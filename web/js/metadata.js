@@ -44,20 +44,24 @@ app.registerExtension({
                 let r = null
                 if (file.type === "image/png") {
                     const pngInfo = await getPngMetadata(file);
-                    if (pngInfo) {
-                        if (pngInfo.workflow) {
-                            r = await app.loadGraphData(JSON.parse(pngInfo.workflow));
-                        } else if (pngInfo.prompt) {
-                            r = app.loadApiJson(JSON.parse(pngInfo.prompt));
-                        } else if (pngInfo.parameters) {
-                            r = await importA1111(app.graph, pngInfo.parameters);
-                        }
+                    if (pngInfo?.workflow) {
+                        r = await app.loadGraphData(JSON.parse(pngInfo.workflow));
+                    } else if (pngInfo?.prompt) {
+                        r = app.loadApiJson(JSON.parse(pngInfo.prompt));
+                    } else if (pngInfo?.parameters) {
+                        r = await importA1111(app.graph, pngInfo.parameters);
+                    } else {
+                        this.showErrorOnFileLoad(file)
                     }
                 } else if (file.type === "image/jpeg" || file.type === "image/jpg") {
-                    r = await getJpegMetadataA111(app, file)
-                    if (!r) {
-                        const jpegMetadata = await getPngMetadata(file);
-                        r = await importA1111(app.graph, jpegMetadata.parameters);
+                    let jpegMetadata = await getJpegMetadataA111(app, file)
+                    if (!jpegMetadata) {
+                        jpegMetadata = await getPngMetadata(file);
+                        if (jpegMetadata) {
+                            r = await importA1111(app.graph, jpegMetadata.parameters);
+                        } else {
+                            this.showErrorOnFileLoad(file)
+                        }
                     }
                 } else {
                     r = handleFile.apply(this, arguments);

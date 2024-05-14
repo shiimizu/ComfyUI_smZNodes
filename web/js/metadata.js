@@ -50,11 +50,15 @@ app.registerExtension({
                         } else if (pngInfo.prompt) {
                             r = app.loadApiJson(JSON.parse(pngInfo.prompt));
                         } else if (pngInfo.parameters) {
-                            r = importA1111(app.graph, pngInfo.parameters);
+                            r = await importA1111(app.graph, pngInfo.parameters);
                         }
                     }
                 } else if (file.type === "image/jpeg" || file.type === "image/jpg") {
-                    r = getJpegMetadataA111(app, file)
+                    r = await getJpegMetadataA111(app, file)
+                    if (!r) {
+                        const jpegMetadata = await getPngMetadata(file);
+                        r = await importA1111(app.graph, jpegMetadata.parameters);
+                    }
                 } else {
                     r = handleFile.apply(this, arguments);
                 }
@@ -72,8 +76,7 @@ export async function getJpegMetadataA111(app, file) {
             reader.onload = (event) => {
                 try {
                     if (_EXIF) {
-                        let rawJpegMetdata = new Uint8Array(event.target.result);
-                        rawJpegMetdata = _EXIF.readFromBinaryFile(rawJpegMetdata.buffer.slice(rawJpegMetdata.byteOffset, rawJpegMetdata.byteLength + rawJpegMetdata.byteOffset));
+                        let rawJpegMetdata = _EXIF.readFromBinaryFile(event.target.result)
                         if (Object.keys(rawJpegMetdata).includes('UserComment')) {
                             const jpegMetadata = String.fromCharCode(...rawJpegMetdata.UserComment.slice(9).filter((value) => value !== 0));
                             importA1111(app.graph, jpegMetadata);

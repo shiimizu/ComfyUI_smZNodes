@@ -28,7 +28,7 @@ app.registerExtension({
             const callerLine = stackLines[1];
 
             // Extract the file location from the caller line
-            const scriptLocation = callerLine.match(/\((.*):[0-9]+:[0-9]+\)/)[1];
+            const scriptLocation = callerLine.match(/http.*\.js:\d+:\d+/)[0];
             const url = new URL(scriptLocation);
             const relativePath = url.pathname
             exifPath = relativePath.substring(0, relativePath.lastIndexOf('/')) + '/exif.js';

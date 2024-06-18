@@ -36,7 +36,7 @@ class smZ_CLIPTextEncode:
                 "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
                 # whether weights are normalized by taking the mean
                 "mean_normalization": (BOOLEAN, {"default": True}),
-                "multi_conditioning": (BOOLEAN, {"default": True}),
+                "multi_conditioning": (BOOLEAN, {"default": False}),
                 "use_old_emphasis_implementation": (BOOLEAN, {"default": False}),
                 "with_SDXL": (BOOLEAN, {"default": False}),
                 "ascore": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 1000.0, "step": 0.01}),

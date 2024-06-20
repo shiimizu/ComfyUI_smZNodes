@@ -1,0 +1,14 @@
+[project]
+name = "comfyui_smznodes"
+description = "NODES: CLIP Text Encode++. Achieve identical embeddings from stable-diffusion-webui for ComfyUI."
+version = "1.0.0"
+license = "LICENSE"
+
+[project.urls]
+Repository = "https://github.com/shiimizu/ComfyUI_smZNodes"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI_smZNodes"
+Icon = ""

@@ -19,6 +19,7 @@ from comfy.ldm.modules.distributions.distributions import DiagonalGaussianDistri
 from comfy.sample import np
 from comfy import model_management
 import comfy.samplers
+from comfy.samplers import sampling_function
 import inspect
 from textwrap import dedent, indent
 import functools
@@ -1162,7 +1163,7 @@ class CFGGuider(CFGGuiderOrig):
         return out
 
 
-def sampling_function(model, x, timestep, uncond, cond, cond_scale, model_options={}, seed=None):
+def sampling_function_(model, x, timestep, uncond, cond, cond_scale, model_options={}, seed=None):
         if math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False:
             uncond_ = None
         else:

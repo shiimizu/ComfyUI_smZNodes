@@ -221,9 +221,10 @@ class EmbeddingsWithFixes(torch.nn.Module):
         self.embeddings = embeddings
         self.textual_inversion_key = textual_inversion_key
 
-    def forward(self, input_ids):
+    def forward(self, input_ids, *args, **kwargs):
         batch_fixes = self.embeddings.fixes
         self.embeddings.fixes = None
+        out_dtype = kwargs.get('out_dtype', None)
 
         try:
             inputs_embeds = self.wrapped(input_ids)
@@ -236,8 +237,11 @@ class EmbeddingsWithFixes(torch.nn.Module):
         vecs = []
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
-                vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
-                emb = devices.cond_cast_unet(vec)
+                emb = vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
+                if out_dtype is not None:
+                    emb = emb.to(dtype=out_dtype)
+                else:
+                    emb = devices.cond_cast_unet(vec)
                 if emb.device != tensor.device:
                     emb = emb.to(device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])

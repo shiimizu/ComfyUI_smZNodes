@@ -428,11 +428,18 @@ def parse_prompt_attention(text):
         return res
     elif opts.prompt_attention == 'Compel parser':
         conjunction = Compel.parse_prompt_string(text)
-        if conjunction is None or conjunction.prompts is None or conjunction.prompts is None or len(conjunction.prompts[0].children) == 0:
+        if conjunction is None or conjunction.prompts is None or conjunction.prompts is None:
+            return [["", 1.0]]
+        use_and = '.and(' in text
+        cprompts = conjunction.prompts if 'Blend' in conjunction.prompts[0].__class__.__name__ else [conjunction.prompts]
+        first_el = conjunction.prompts[0].prompts[0] if hasattr(conjunction.prompts[0], 'prompts') else conjunction.prompts[0]
+        if len(first_el.children) == 0:
             return [["", 1.0]]
         res = []
-        for frag in conjunction.prompts[0].children:
-            res.append([frag.text, frag.weight])
+        for bprompt in cprompts:
+            for prompt_idx, prompt in enumerate(bprompt.prompts if hasattr(bprompt, 'prompts') else bprompt):
+                for k, frag in enumerate(prompt.children):
+                    res.append([f'{" AND " if use_and and k == 0 and prompt_idx > 0 else ""}{frag.text}', frag.weight])
         return res
     elif opts.prompt_attention == 'A1111 parser':
         re_attention = re_attention_v1

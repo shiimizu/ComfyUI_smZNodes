@@ -107,11 +107,11 @@ export async function importA1111(graph, parameters) {
     if (p > -1) {
         const embeddings = await api.getEmbeddings();
         const regexp = /(.+?): (?:"(.+?)",?|(.+?)(?:,|$))/gm;
-        let opts = [...parameters.substr(p).matchAll(regexp)]
+        let opts = [...parameters.substring(p).matchAll(regexp)]
             .reduce((a, m) => ({ ...a, [m[1].trim().toLowerCase()]: m[3] ? m[3] : m[2] }), {})
         const p2 = parameters.lastIndexOf("\nNegative prompt:", p);
         if (p2 > -1) {
-            let positive = parameters.substr(0, p2).trim();
+            let positive = parameters.substring(0, p2).trim();
             let negative = parameters.substring(p2 + 18, p).trim();
 
             const ckptNode = LiteGraph.createNode("CheckpointLoaderSimple");
@@ -246,7 +246,7 @@ export async function importA1111(graph, parameters) {
             function basename(n) {
                 const i = n.lastIndexOf('.')
                 if (i !== -1)
-                    return n.substr(0, i)
+                    return n.substring(0, i)
                 else
                     return n
             }

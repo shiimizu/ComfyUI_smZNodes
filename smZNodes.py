@@ -826,7 +826,7 @@ def prompt_handler(json_data):
         """Find the nearest KSampler node that references the given CLIPTextEncode id."""
         nonlocal data, steps_validator
         for ksampler_id, node in data.items():
-            if "Sampler" in node["class_type"] or "sampler" in node["class_type"]:
+            if "class_type" in node and ("Sampler" in node["class_type"] or "sampler" in node["class_type"]):
                 # Check if this KSampler node directly or indirectly references the given CLIPTextEncode node
                 if check_link_to_clip(ksampler_id, clip_id):
                     return get_val(data, ksampler_id, steps_validator, 'steps')
@@ -883,7 +883,7 @@ def prompt_handler(json_data):
 
     # Update each CLIPTextEncode node's steps with the steps from its nearest referencing KSampler node
     for clip_id, node in data.items():
-        if node["class_type"] == "smZ CLIPTextEncode":
+        if "class_type" in node and node["class_type"] == "smZ CLIPTextEncode":
             check_str = prompt_editing = False
             if check_str:
                 if (fast_search:=True):

@@ -1,15 +1,24 @@
-from comfy.model_management import vram_state, VRAMState
 import logging
 from copy import deepcopy
-from comfy.cli_args import args
-from comfy import model_management
-from . import devices
+
+if __name__ != "shared":
+    from comfy.model_management import vram_state, VRAMState
+    from comfy.cli_args import args
+    from comfy import model_management
+    from . import devices
+    xformers_available = model_management.XFORMERS_IS_AVAILABLE
+    device = devices.device
+else:
+    vram_state=args= object()
+    class VRAMState_: ...
+    VRAMState = VRAMState_()
+    setattr(VRAMState, 'LOW_VRAM', 0)
+    setattr(VRAMState, 'NORMAL_VRAM', 1)
+    xformers_available=True
 
 log = logging.getLogger("sd")
 options_templates = {}
 loaded_hypernetworks = []
-xformers_available = model_management.XFORMERS_IS_AVAILABLE
-device = devices.device
 
 class Options: ...
 

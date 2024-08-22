@@ -21,7 +21,7 @@ try:
     widgets_path = os.path.join(comfy_path, "web", "scripts", "widgets.js")
     with open(widgets_path, encoding='utf8') as f:
         widgets_js = f.read()
-    if 'BOOLEAN(' in widgets_js:
+    if 'Shim' in widgets_js or 'BOOLEAN(' in widgets_js:
         BOOLEAN = "BOOLEAN"
     del widgets_js
 except Exception as err:

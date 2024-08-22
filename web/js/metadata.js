@@ -288,6 +288,30 @@ export async function importA1111(graph, parameters) {
                 "clip skip"(v) {
                     setWidgetValue(clipSkipNode, "stop_at_clip_layer", -v);
                 },
+                "schedule type"(v) {
+                    // This is called after sampler(v)
+                    let name = v.toLowerCase().replaceAll(" ", "_");
+                    let scheduler_map = {
+                        "Automatic": "normal",
+                        // "Uniform": "",
+                        // "Polyexponential": "",
+                        // "SGM Uniform": "",
+                        // "KL Optimal": "",
+                        "Align Your Steps": "ays",
+                        "DDIM": "ddim_uniform",
+                        // "Turbo": "",
+                        "Align Your Steps GITS": "gits",
+                        "Align Your Steps 11": "ays_30",
+                        "Align Your Steps 32": "ays_30+",
+                    };
+                    for (const k in scheduler_map) {
+                        if (v === k) {
+                            name = scheduler_map[k];
+                            break;
+                        }
+                    }
+                    setWidgetValue(samplerNode, "scheduler", name);
+                },
                 sampler(v) {
                     // SDE Heun solver is found in the SamplerCustom node
                     let name = v.toLowerCase().replace("++", "pp").replaceAll(" ", "_").replace("_heun", "").replace("_sde", "_sde_gpu");
@@ -400,6 +424,9 @@ export async function importA1111(graph, parameters) {
                     const o = w.options.values.map((w) => ({ name: w, similarity: stringSimilarity(vbasename, basename(w)) }));
                     o.sort((a, b) => b.similarity - a.similarity)
                     setWidgetValue(vaeLoaderNode, "vae_name", o?.[0]?.name ? (o[0].similarity > similarityThreshold ? o[0].name : v) : v, true);
+                },
+                "module 1"(v) {
+                    this.vae(v);
                 },
                 ["hires steps"](v) {
                     const o = +v

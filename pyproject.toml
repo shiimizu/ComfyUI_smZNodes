@@ -1,9 +1,9 @@
 [project]
 name = "comfyui_smznodes"
 description = "Nodes such as CLIP Text Encode++ to achieve identical embeddings from stable-diffusion-webui for ComfyUI."
-version = "1.0.0"
+version = "1.0.1"
 license = { file = "LICENSE" }
-dependencies = ["lark >= 1.1.9"]
+dependencies = ["lark >= 1.1.9", "compel"]
 
 [project.urls]
 Repository = "https://github.com/shiimizu/ComfyUI_smZNodes"

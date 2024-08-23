@@ -200,8 +200,10 @@ class FrozenOpenCLIPEmbedder2WithCustomWordsCustom(FrozenOpenCLIPEmbedder2WithCu
         pass
 
     def tokenize(self, texts):
+        self.tokenizer._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
         # assert not opts.use_old_emphasis_implementation, 'Old emphasis implementation not supported for Open Clip'
-        tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
+        tokenized = self.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
+        del self.tokenizer._eventual_warn_about_too_long_sequence
         return tokenized
 
 
@@ -228,7 +230,9 @@ class FrozenCLIPEmbedderWithCustomWordsCustom(FrozenCLIPEmbedderForSDXLWithCusto
         return super().tokenize_line(line)
 
     def tokenize(self, texts):
-        tokenized = [self.tokenizer(text)["input_ids"][1:-1] for text in texts]
+        self.tokenizer._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
+        tokenized = self.tokenizer(texts, truncation=False, add_special_tokens=False)["input_ids"]
+        del self.tokenizer._eventual_warn_about_too_long_sequence
         return tokenized
 
 emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?:(:)(\d+\.?\d*|\d*\.\d+))?"

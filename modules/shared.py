@@ -20,7 +20,9 @@ log = logging.getLogger("sd")
 options_templates = {}
 loaded_hypernetworks = []
 
-class Options: ...
+class Options:
+    def clone(self):
+        return deepcopy(self)
 
 opts = Options()
 opts.prompt_attention = 'A1111 parser'
@@ -72,7 +74,7 @@ cmd_opts.medvram = vram_state == VRAMState.NORMAL_VRAM
 should_batch_cond_uncond = lambda: opts.batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
 opts.batch_cond_uncond = True
 
-opts_default = deepcopy(opts)
+opts_default = opts.clone()
 
 cmd_opts.xformers = xformers_available
 cmd_opts.force_enable_xformers = xformers_available

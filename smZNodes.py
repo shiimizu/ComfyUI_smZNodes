@@ -610,8 +610,8 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         guider = _find_outer_instance('guider', comfy.samplers.CFGGuider)
         model = getattr(guider, 'model_patcher', None)
     if (model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None) or opts is None:
-        import comfy.sample
-        return comfy.sample.prepare_noise_orig(latent_image, seed, noise_inds)
+        opts = shared.opts_default.clone()
+        device = 'cpu'
 
     if opts.randn_source == 'gpu':
         device = model_management.get_torch_device()
@@ -1498,6 +1498,10 @@ def hook_for_settings_node_and_sampling():
     elif hasattr(comfy.samplers, 'CFGNoisePredictor'):
         comfy.samplers.CFGNoisePredictor = CFGGuider
 
+# Proper RNG preparation
+def hook_prepare_noise():
+    comfy.sample.prepare_noise = prepare_noise
+
 def hook_for_rng_orig():
     if not hasattr(comfy.sample, 'prepare_noise_orig'):
         comfy.sample.prepare_noise_orig = comfy.sample.prepare_noise
@@ -1525,6 +1529,7 @@ def register_hooks():
         hook_for_settings_node_and_sampling,
         hook_for_rng_orig,
         hook_for_dtype_unet,
+        hook_prepare_noise,
     ]
     for hook in hooks:
         try_hook(hook)

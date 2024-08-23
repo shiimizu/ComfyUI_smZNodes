@@ -11,7 +11,6 @@ import comfy.model_patcher
 import comfy.sd
 import comfy.model_management
 import comfy.samplers
-import comfy.sample
 from copy import deepcopy
 
 BOOLEAN = [False, True]
@@ -209,12 +208,11 @@ class smZ_Settings:
 
         first = first.clone()
         opts_key = 'smZ_opts'
-        if type(first) is comfy.model_patcher.ModelPatcher:
+        if isinstance(first, comfy.model_patcher.ModelPatcher):
             first.model_options.pop(opts_key, None)
             first.model_options[opts_key] = opts
-            comfy.sample.prepare_noise = prepare_noise
             opts_global.debug = opts.debug
-        elif type(first) is comfy.sd.CLIP:
+        elif isinstance(first, comfy.sd.CLIP):
             first.patcher.model_options.pop(opts_key, None)
             first.patcher.model_options[opts_key] = opts
             opts_global.debug = opts.debug

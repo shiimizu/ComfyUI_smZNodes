@@ -3,6 +3,7 @@ import re
 import torch
 import inspect
 import contextlib
+import logging
 import comfy
 from functools import partial
 import comfy.sdxl_clip
@@ -289,7 +290,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                 if embedding_name:
                     embed, leftover = self._try_get_embedding(embedding_name)
                     if embed is None:
-                        print(f"warning, embedding:{embedding_name} does not exist, ignoring")
+                        logging.warning(f"warning, embedding:{embedding_name} does not exist, ignoring")
                     else:
                         logger.debug(f'using embedding:{embedding_name}')
                         if len(embed.shape) == 1:

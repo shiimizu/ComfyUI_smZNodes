@@ -116,7 +116,6 @@ class ClassicTextProcessingEngine:
         return tokenized
     
     def tokenize_with_weights(self, texts, return_word_ids=False):
-        print('inside tokenize_with_weights a1111', self.embedding_key)
         batch_chunks, token_count = self.process_texts(texts)
 
         used_embeddings = {}

@@ -256,10 +256,6 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     Word id values are unique per word and embedding, where the id 0 is reserved for non word tokens.
     Returned list has the dimensions NxM where M is the input size of CLIP
     '''
-    if self.pad_with_end:
-        pad_token = self.end_token
-    else:
-        pad_token = 0
 
     text = escape_important(text)
     parsed_weights = token_weights(text, 1.0)
@@ -325,7 +321,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                 else:
                     batch.append((self.end_token, 1.0, 0))
                     if self.pad_to_max_length:
-                        batch.extend([(pad_token, 1.0, 0)] * (remaining_length))
+                        batch.extend([(self.pad_token, 1.0, 0)] * (remaining_length))
                 #start new batch
                 batch = []
                 if self.start_token is not None:
@@ -338,7 +334,9 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     #fill last batch
     batch.append((self.end_token, 1.0, 0))
     if self.pad_to_max_length:
-        batch.extend([(pad_token, 1.0, 0)] * (self.max_length - len(batch)))
+        batch.extend([(self.pad_token, 1.0, 0)] * (self.max_length - len(batch)))
+    if self.min_length is not None and len(batch) < self.min_length:
+        batch.extend([(self.pad_token, 1.0, 0)] * (self.min_length - len(batch)))
 
     if not return_word_ids:
         batched_tokens = [[(t, w) for t, w,_ in x] for x in batched_tokens]

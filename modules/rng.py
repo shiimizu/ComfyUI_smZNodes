@@ -63,11 +63,11 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
     opts = None
     model = _find_outer_instance('model', ModelPatcher)
-    if (model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None) or opts is None:
+    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY, None)) is None) or opts is None:
         import comfy.samplers
         guider = _find_outer_instance('guider', comfy.samplers.CFGGuider)
         model = getattr(guider, 'model_patcher', None)
-    if (model is not None and (opts:=model.model_options.get('smZ_opts', None)) is None) or opts is None:
+    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY, None)) is None) or opts is None:
         opts = shared.opts_default.clone()
         device = 'cpu'
 

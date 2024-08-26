@@ -43,9 +43,9 @@ class smZ_CLIPTextEncode:
                multi_conditioning, use_old_emphasis_implementation,
                with_SDXL, ascore, width, height, crop_w, 
                crop_h, target_width, target_height, text_g, text_l, smZ_steps=1):
-        from .modules.shared import opts, opts_default
+        from .modules.shared import Options, opts, opts_default
         debug=opts.debug # get global opts' debug
-        if (opts_new := clip.patcher.model_options.get('smZ_opts', None)) is not None:
+        if (opts_new := clip.patcher.model_options.get(Options.KEY, None)) is not None:
             opts.update(opts_new)
             debug = opts_new.debug
         else:

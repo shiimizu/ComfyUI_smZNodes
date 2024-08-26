@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import re
 from collections import namedtuple
-from typing import List
 import lark
+from typing import List
 import torch
 from compel import Compel
 if __name__ == "__main__":
-    from shared import opts, log
+    from shared import opts, logger
 else:
-    from .shared import opts, log
+    from .shared import opts, logger
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][: in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -185,6 +185,7 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
     res = []
 
     prompt_schedules = get_learned_conditioning_prompt_schedules(prompts, steps, hires_steps, use_old_scheduling)
+    logger.debug(prompt_schedules)
     cache = {}
     for prompt, prompt_schedule in zip(prompts, prompt_schedules):
 
@@ -195,14 +196,23 @@ def get_learned_conditioning(model, prompts: SdConditioning | list[str], steps, 
 
         texts = SdConditioning([x[1] for x in prompt_schedule], copy_from=prompts)
         # conds = model.get_learned_conditioning(texts)
-        conds = model.forward(texts)
+        conds = model(texts)
+        if isinstance(conds, tuple):
+            conds, pooleds = conds
+            conds.pooled = pooleds
         cond_schedule = []
         for i, (end_at_step, _) in enumerate(prompt_schedule):
             if isinstance(conds, dict):
-                cond = {k: v[i] for k, v in conds.items()}
+                if 'cond' not in conds:
+                    cond = {k: v[i] for k, v in conds.items()}
+                else:
+                    # cond = {k: (v[i:i+1, :] if isinstance(v, torch.Tensor) else v) for k, v in conds.items()}
+                    cond = {k: (v[i].unsqueeze(0)[0:1] if isinstance(v, torch.Tensor) else v) for k, v in conds.items()}
             else:
-                cond = conds[i]
-                cond.pooled = conds.pooled[i].unsqueeze(0)[0:1]
+                # cond = conds[i]
+                cond = conds[i:i+1, :]
+                if conds.pooled is not None:
+                    cond.pooled = conds.pooled[i:i+1, :]
             cond_schedule.append(ScheduledPromptConditioning(end_at_step, cond))
 
         cache[prompt] = cond_schedule
@@ -277,7 +287,7 @@ def get_multicond_learned_conditioning(model, prompts, steps, hires_steps=None, 
 
 
 class DictWithShape(dict):
-    def __init__(self, x, shape):
+    def __init__(self, x, shape=None):
         super().__init__()
         self.update(x)
 
@@ -293,8 +303,12 @@ def reconstruct_cond_batch(c: List[List[ScheduledPromptConditioning]], current_s
 
     if is_dict:
         dict_cond = param
-        res = {k: torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype) for k, param in dict_cond.items()}
-        res = DictWithShape(res, (len(c),) + dict_cond['crossattn'].shape)
+        if 'crossattn' in dict_cond:
+            res = {k: torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype) for k, param in dict_cond.items()}
+            res = DictWithShape(res, (len(c),) + dict_cond['crossattn'].shape)
+        elif 'cond' in dict_cond:
+            param = dict_cond['cond']
+            res = torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype)
     else:
         res = torch.zeros((len(c),) + param.shape, device=param.device, dtype=param.dtype)
 
@@ -305,13 +319,18 @@ def reconstruct_cond_batch(c: List[List[ScheduledPromptConditioning]], current_s
                 target_index = current
                 break
 
+        cond_target = cond_schedule[target_index].cond
         if is_dict:
-            for k, param in cond_schedule[target_index].cond.items():
-                res[k][i] = param
+            if 'cond' in cond_target:
+                res[i] = cond_target['cond']
+                pooled_outputs.append(cond_target['pooled_output'])
+            else:
+                for k, param in cond_target.items():
+                    res[k][i] = param
         else:
-            res[i] = cond_schedule[target_index].cond
-            pooled_outputs.append(cond_schedule[target_index].cond.pooled)
-    res.pooled = torch.cat(pooled_outputs).to(device=param.device, dtype=param.dtype)
+            res[i] = cond_target
+            pooled_outputs.append(cond_target.pooled)
+    res.pooled = torch.cat(pooled_outputs).to(param) if pooled_outputs[0] is not None else None
     return res
 
 

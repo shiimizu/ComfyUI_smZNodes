@@ -1,5 +1,29 @@
 import logging
+import sys
 from copy import deepcopy
+
+class SimpleNamespaceFast:
+    def __repr__(self):
+        keys = sorted(self.__dict__)
+        items = ("{}={!r}".format(k, self.__dict__[k]) for k in keys)
+        return "{}({})".format(type(self).__name__, ", ".join(items))
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+logger = logging.getLogger("smZNodes")
+level=logging.INFO
+logger.propagate = False
+logger.setLevel(level)
+stdoutHandler = logging.StreamHandler()
+stdoutHandler.setLevel(level)
+fmt = logging.Formatter("[%(name)s] | %(filename)s:%(lineno)s | %(message)s")
+stdoutHandler.setFormatter(fmt)
+stdoutHandler.addFilter(lambda record: record.levelname == logging.getLevelName(level))
+logger.addHandler(stdoutHandler)
+logger.d=lambda *args: logger.debug(' '.join(map(str, args)))
+def join_args(*args):
+    return ' '.join(map(str, args))
 
 if __name__ != "shared":
     from comfy.model_management import vram_state, VRAMState
@@ -10,17 +34,15 @@ if __name__ != "shared":
     device = devices.device
 else:
     vram_state=args= object()
-    class VRAMState_: ...
-    VRAMState = VRAMState_()
+    VRAMState = SimpleNamespaceFast()
     setattr(VRAMState, 'LOW_VRAM', 0)
     setattr(VRAMState, 'NORMAL_VRAM', 1)
     xformers_available=True
 
-log = logging.getLogger("sd")
 options_templates = {}
 loaded_hypernetworks = []
 
-class Options:
+class Options(SimpleNamespaceFast):
     def clone(self):
         return deepcopy(self)
 
@@ -34,6 +56,8 @@ opts.use_old_emphasis_implementation = False
 opts.disable_nan_check = True
 opts.pad_cond_uncond = False
 opts.s_min_uncond = 0.0
+opts.s_min_uncond_all = False
+opts.skip_early_cond = 0.0
 opts.upcast_sampling = True
 opts.upcast_attn = not getattr(args, 'dont_upcast_attention', False)
 opts.textual_inversion_add_hashes_to_infotext  = False

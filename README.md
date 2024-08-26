@@ -103,7 +103,7 @@ This node can change whenever it is updated, so you may have to **recreate** it 
 - Where can I learn more about how ComfyUI interprets weights?
     - https://comfyanonymous.github.io/ComfyUI_examples/faq/
     - https://blenderneko.github.io/ComfyUI-docs/Interface/Textprompts/
-    - [comfyui.creamlab.net)](https://comfyui.creamlab.net/guides/f_text_prompt)
+    - [comfyui.creamlab.net](https://comfyui.creamlab.net/guides/f_text_prompt)
 
 
 ## Installation
@@ -153,3 +153,5 @@ git pull
 
 * [AUTOMATIC1111](https://github.com/AUTOMATIC1111) / [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 * [comfyanonymous](https://github.com/comfyanonymous) / [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+* [vladmandic](https://github.com/vladmandic) / [SD.Next](https://github.com/vladmandic/automatic)
+* [lllyasviel](https://github.com/lllyasviel) / [stable-diffusion-webui-forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)

@@ -23,24 +23,25 @@ class PromptChunk:
 
 PromptChunkFix = namedtuple('PromptChunkFix', ['offset', 'embedding'])
 """An object of this type is a marker showing that textual inversion embedding's vectors have to placed at offset in the prompt
-chunk. Thos objects are found in PromptChunk.fixes and, are placed into FrozenCLIPEmbedderWithCustomWordsBase.hijack.fixes, and finally
+chunk. Those objects are found in PromptChunk.fixes and, are placed into FrozenCLIPEmbedderWithCustomWordsBase.hijack.fixes, and finally
 are applied by sd_hijack.EmbeddingsWithFixes's forward function."""
 
 
-class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
-    """A pytorch module that is a wrapper for FrozenCLIPEmbedder module. it enhances FrozenCLIPEmbedder, making it possible to
-    have unlimited prompt length and assign weights to tokens in prompt.
-    """
-    def __init__(self, wrapped: SD1ClipModel|SDXLClipModel, hijack):
+class TextConditionalModel(torch.nn.Module):
+    def __init__(self):
         super().__init__()
-        self.wrapped = wrapped
-        """Original FrozenCLIPEmbedder module; can also be FrozenOpenCLIPEmbedder or xlmr.BertSeriesModelWithTransformation,
-        depending on model."""
-        self.hijack: sd_hijack.StableDiffusionModelHijack = hijack
+
+        self.hijack = sd_hijack.model_hijack
         self.chunk_length = 75
-        self.is_trainable = getattr(wrapped, 'is_trainable', False)
-        self.input_key = getattr(wrapped, 'input_key', 'txt')
-        self.legacy_ucg_val = None
+
+        self.is_trainable = False
+        self.input_key = 'txt'
+        self.return_pooled = False
+
+        self.comma_token = None
+        self.id_start = None
+        self.id_end = None
+        self.id_pad = None
 
     def empty_chunk(self):
         """creates an empty PromptChunk and returns it"""
@@ -60,7 +61,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
 
     def encode_with_transformers(self, tokens):
         """
-        converts a batch of token ids (in python lists) into a single tensor with numeric respresentation of those tokens;
+        converts a batch of token ids (in python lists) into a single tensor with numeric representation of those tokens;
         All python lists with tokens are assumed to have same length, usually 77.
         if input is a list with B elements and each element has T tokens, expected output shape is (B, T, C), where C depends on
         model - can be 768 and 1024.
@@ -122,7 +123,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
                 token = tokens[position]
                 if token == self.comma_token:
                     last_comma = len(chunk.tokens)
-                # this is when we are at the end of alloted 75 tokens for the current chunk, and the current token is not a comma. opts.comma_padding_backtrack
+                # this is when we are at the end of allotted 75 tokens for the current chunk, and the current token is not a comma. opts.comma_padding_backtrack
                 # is a setting that specifies that if there is a comma nearby, the text after the comma should be moved out of this chunk and into the next.
                 elif opts.comma_padding_backtrack != 0 and len(chunk.tokens) == self.chunk_length and last_comma != -1 and len(chunk.tokens) - last_comma <= opts.comma_padding_backtrack:
                     break_location = last_comma + 1
@@ -183,7 +184,7 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         be a multiple of 77; and C is dimensionality of each token - for SD1 it's 768, for SD2 it's 1024, and for SDXL it's 1280.
         An example shape returned by this function can be: (2, 77, 768).
         For SDXL, instead of returning one tensor above, it returns a tuple with two: the other one with shape (B, 1280) with pooled values.
-        Webui usually sends just one text at a time through this function - the only time when texts is an array with more than one elemenet
+        Webui usually sends just one text at a time through this function - the only time when texts is an array with more than one element
         is when you do prompt editing: "a picture of a [cat:dog:0.4] eating ice cream"
         """
         if opts.use_old_emphasis_implementation:
@@ -288,6 +289,29 @@ class FrozenCLIPEmbedderWithCustomWordsBase(torch.nn.Module):
         z.pooled = pooled
         return z
 
+
+class FrozenCLIPEmbedderWithCustomWordsBase(TextConditionalModel):
+    """A pytorch module that is a wrapper for FrozenCLIPEmbedder module. it enhances FrozenCLIPEmbedder, making it possible to
+    have unlimited prompt length and assign weights to tokens in prompt.
+    """
+
+    def __init__(self, wrapped, hijack):
+        super().__init__()
+        self.hijack: sd_hijack.StableDiffusionModelHijack = hijack
+        self.wrapped = wrapped
+        """Original FrozenCLIPEmbedder module; can also be FrozenOpenCLIPEmbedder or xlmr.BertSeriesModelWithTransformation,
+        depending on model."""
+        self.is_trainable = getattr(wrapped, 'is_trainable', False)
+        self.input_key = getattr(wrapped, 'input_key', 'txt')
+        self.return_pooled = getattr(self.wrapped, 'return_pooled', False)
+        self.legacy_ucg_val = None  # for sgm codebase
+
+    def forward(self, texts):
+        if opts.use_old_emphasis_implementation:
+            import modules.sd_hijack_clip_old
+            return modules.sd_hijack_clip_old.forward_old(self, texts)
+
+        return super().forward(texts)
 
 class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
     def __init__(self, wrapped, hijack):

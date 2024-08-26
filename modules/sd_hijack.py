@@ -89,6 +89,55 @@ def undo_optimizations():
     comfy.ldm.modules.diffusionmodules.model.nonlinearity = comfy.ldm.modules.diffusionmodules.model.nonlinearity_orig
     comfy.ldm.modules.diffusionmodules.openaimodel.th = comfy.ldm.modules.diffusionmodules.openaimodel.th_orig
 
+
+def weighted_loss(sd_model, pred, target, mean=True):
+    #Calculate the weight normally, but ignore the mean
+    loss = sd_model._old_get_loss(pred, target, mean=False) # pylint: disable=protected-access
+
+    #Check if we have weights available
+    weight = getattr(sd_model, '_custom_loss_weight', None)
+    if weight is not None:
+        loss *= weight
+
+    #Return the loss, as mean if specified
+    return loss.mean() if mean else loss
+
+def weighted_forward(sd_model, x, c, w, *args, **kwargs):
+    try:
+        #Temporarily append weights to a place accessible during loss calc
+        sd_model._custom_loss_weight = w # pylint: disable=protected-access
+
+        #Replace 'get_loss' with a weight-aware one. Otherwise we need to reimplement 'forward' completely
+        #Keep 'get_loss', but don't overwrite the previous old_get_loss if it's already set
+        if not hasattr(sd_model, '_old_get_loss'):
+            sd_model._old_get_loss = sd_model.get_loss # pylint: disable=protected-access
+        sd_model.get_loss = MethodType(weighted_loss, sd_model)
+
+        #Run the standard forward function, but with the patched 'get_loss'
+        return sd_model.forward(x, c, *args, **kwargs)
+    finally:
+        try:
+            #Delete temporary weights if appended
+            del sd_model._custom_loss_weight
+        except AttributeError:
+            pass
+
+        #If we have an old loss function, reset the loss function to the original one
+        if hasattr(sd_model, '_old_get_loss'):
+            sd_model.get_loss = sd_model._old_get_loss
+            del sd_model._old_get_loss
+
+def apply_weighted_forward(sd_model):
+    #Add new function 'weighted_forward' that can be called to calc weighted loss
+    sd_model.weighted_forward = MethodType(weighted_forward, sd_model)
+
+def undo_weighted_forward(sd_model):
+    try:
+        del sd_model.weighted_forward
+    except AttributeError:
+        pass
+
+
 class StableDiffusionModelHijack:
     fixes = None
     comments = []
@@ -97,13 +146,20 @@ class StableDiffusionModelHijack:
     clip = None
     tokenizer = None
     optimization_method = None
-    embedding_db = textual_inversion.EmbeddingDatabase()
+    def __init__(self):
+        # import modules.textual_inversion.textual_inversion
+
+        self.extra_generation_params = {}
+        self.comments = []
+
+        self.embedding_db = textual_inversion.EmbeddingDatabase()
+        # self.embedding_db.add_embedding_dir(cmd_opts.embeddings_dir)
 
     def apply_optimizations(self, option=None):
         try:
             self.optimization_method = apply_optimizations(option)
         except Exception as e:
-            errors.display(e, "applying optimizations")
+            errors.display(e, "applying cross attention optimization")
             undo_optimizations()
 
     def hijack(self, m: comfy.sd1_clip.SD1ClipModel):
@@ -157,61 +213,24 @@ class StableDiffusionModelHijack:
 
     def clear_comments(self):
         self.comments = []
+        self.extra_generation_params = {}
 
     def get_prompt_lengths(self, text):
         if self.clip is None:
-            return 0, 0
-        _, token_count = self.clip.process_texts([text])
+            return "-", "-"
+
+        if hasattr(self.clip, 'get_token_count'):
+            token_count = self.clip.get_token_count(text)
+        else:
+            _, token_count = self.clip.process_texts([text])
+
         return token_count, self.clip.get_target_prompt_token_count(token_count)
 
+    def redo_hijack(self, m):
+        self.undo_hijack(m)
+        self.hijack(m)
+
 model_hijack = StableDiffusionModelHijack()
-
-def weighted_loss(sd_model, pred, target, mean=True):
-    #Calculate the weight normally, but ignore the mean
-    loss = sd_model._old_get_loss(pred, target, mean=False) # pylint: disable=protected-access
-
-    #Check if we have weights available
-    weight = getattr(sd_model, '_custom_loss_weight', None)
-    if weight is not None:
-        loss *= weight
-
-    #Return the loss, as mean if specified
-    return loss.mean() if mean else loss
-
-def weighted_forward(sd_model, x, c, w, *args, **kwargs):
-    try:
-        #Temporarily append weights to a place accessible during loss calc
-        sd_model._custom_loss_weight = w # pylint: disable=protected-access
-
-        #Replace 'get_loss' with a weight-aware one. Otherwise we need to reimplement 'forward' completely
-        #Keep 'get_loss', but don't overwrite the previous old_get_loss if it's already set
-        if not hasattr(sd_model, '_old_get_loss'):
-            sd_model._old_get_loss = sd_model.get_loss # pylint: disable=protected-access
-        sd_model.get_loss = MethodType(weighted_loss, sd_model)
-
-        #Run the standard forward function, but with the patched 'get_loss'
-        return sd_model.forward(x, c, *args, **kwargs)
-    finally:
-        try:
-            #Delete temporary weights if appended
-            del sd_model._custom_loss_weight
-        except AttributeError:
-            pass
-
-        #If we have an old loss function, reset the loss function to the original one
-        if hasattr(sd_model, '_old_get_loss'):
-            sd_model.get_loss = sd_model._old_get_loss # pylint: disable=protected-access
-            del sd_model._old_get_loss
-
-def apply_weighted_forward(sd_model):
-    #Add new function 'weighted_forward' that can be called to calc weighted loss
-    sd_model.weighted_forward = MethodType(weighted_forward, sd_model)
-
-def undo_weighted_forward(sd_model):
-    try:
-        del sd_model.weighted_forward
-    except AttributeError:
-        pass
 
 
 class EmbeddingsWithFixes(torch.nn.Module):
@@ -237,19 +256,14 @@ class EmbeddingsWithFixes(torch.nn.Module):
         vecs = []
         for fixes, tensor in zip(batch_fixes, inputs_embeds):
             for offset, embedding in fixes:
-                emb = vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
-                if out_dtype is not None:
-                    emb = emb.to(dtype=out_dtype)
-                else:
-                    emb = devices.cond_cast_unet(vec)
-                if emb.device != tensor.device:
-                    emb = emb.to(device=tensor.device)
+                vec = embedding.vec[self.textual_inversion_key] if isinstance(embedding.vec, dict) else embedding.vec
+                vec = vec.to(dtype=out_dtype) if out_dtype is not None else devices.cond_cast_unet(vec)
+                emb = vec.to(device=tensor.device)
                 emb_len = min(tensor.shape[0] - offset - 1, emb.shape[0])
                 try:
                     tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]])
                 except Exception as err:
                     print("WARNING: shape mismatch when trying to apply embedding, embedding will be ignored", tensor.shape[0], emb.shape[1])
-                    # raise err
             vecs.append(tensor)
 
         return torch.stack(vecs)

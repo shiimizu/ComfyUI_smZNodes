@@ -50,7 +50,6 @@ class CLIPEmbeddingForTextualInversion(torch.nn.Module):
                 try:
                     tensor = torch.cat([tensor[0:offset + 1], emb[0:emb_len], tensor[offset + 1 + emb_len:]]).to(dtype=inputs_embeds.dtype)
                 except Exception:
-                    # print("WARNING: shape mismatch when trying to apply embedding, embedding will be ignored", tensor.shape[0], emb.shape[1], self.textual_inversion_key, f"'{embedding.name}'")
                     logging.warning("WARNING: shape mismatch when trying to apply embedding, embedding will be ignored {} != {} {} {} '{}'".format(tensor.shape[0], emb.shape[1], self.current_embeds.weight.shape[1], self.textual_inversion_key, embedding.name))
 
             vecs.append(tensor)
@@ -69,14 +68,7 @@ class ClassicTextProcessingEngine:
 
         self.embeddings = EmbeddingDatabase(self.tokenizer, embedding_expected_shape)
 
-        # if isinstance(embedding_dir, str):
-        #     self.embeddings.add_embedding_dir(embedding_dir)
-        #     self.embeddings.load_textual_inversion_embeddings()
-
-        # self.embedding_key = embedding_key
-
         self.text_encoder = text_encoder
-        # self.tokenizer = tokenizer
         self._try_get_embedding = tokenizer._try_get_embedding
 
         self.emphasis = emphasis.get_current_option(emphasis_name)()
@@ -102,24 +94,6 @@ class ClassicTextProcessingEngine:
 
         self.comma_token = vocab.get(',</w>', None)
         self.tokenizer._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
-
-        # self.token_mults = {}
-
-        # tokens_with_parens = [(k, v) for k, v in vocab.items() if '(' in k or ')' in k or '[' in k or ']' in k]
-        # for text, ident in tokens_with_parens:
-        #     mult = 1.0
-        #     for c in text:
-        #         if c == '[':
-        #             mult /= 1.1
-        #         if c == ']':
-        #             mult *= 1.1
-        #         if c == '(':
-        #             mult *= 1.1
-        #         if c == ')':
-        #             mult /= 1.1
-
-        #     if mult != 1.0:
-        #         self.token_mults[ident] = mult
     
     def unhook(self):
         self.text_encoder.transformer.text_model.embeddings.token_embedding = self.text_encoder.transformer.text_model.embeddings.token_embedding.wrapped
@@ -142,6 +116,7 @@ class ClassicTextProcessingEngine:
         return tokenized
     
     def tokenize_with_weights(self, texts, return_word_ids=False):
+        print('inside tokenize_with_weights a1111', self.embedding_key)
         batch_chunks, token_count = self.process_texts(texts)
 
         used_embeddings = {}
@@ -165,14 +140,12 @@ class ClassicTextProcessingEngine:
         return zs
 
     def encode_token_weights(self, token_weight_pairs):
+        if isinstance(token_weight_pairs[0], str):
+            token_weight_pairs = self.tokenize_with_weights(token_weight_pairs)
+        elif isinstance(token_weight_pairs[0], list):
+            token_weight_pairs = list(map(lambda x: ([list(map(lambda y: y[0], x))], [list(map(lambda y: y[1], x))]), token_weight_pairs))
+
         target_device = model_management.text_encoder_device()
-        if not isinstance(token_weight_pairs[0], tuple):
-            tokens = []
-            weights = []
-            for sublist in token_weight_pairs:
-                tokens.append([token for token, weight in sublist])
-                weights.append([weight for token, weight in sublist])
-            token_weight_pairs = list(([x], [y]) for x,y in zip(tokens, weights))
         zs = []
         for tokens, multipliers in token_weight_pairs:
             z = self.process_tokens(tokens, multipliers)
@@ -294,31 +267,8 @@ class ClassicTextProcessingEngine:
         return batch_chunks, token_count
 
     def __call__(self, texts):
-        target_device = model_management.text_encoder_device()
-        batch_chunks, token_count = self.process_texts(texts)
-
-        used_embeddings = {}
-        chunk_count = max([len(x) for x in batch_chunks])
-
-        zs = []
-        for i in range(chunk_count):
-            batch_chunk = [chunks[i] if i < len(chunks) else self.empty_chunk() for chunks in batch_chunks]
-
-            tokens = [x.tokens for x in batch_chunk]
-            multipliers = [x.multipliers for x in batch_chunk]
-            self.embeddings.fixes = [x.fixes for x in batch_chunk]
-
-            for fixes in self.embeddings.fixes:
-                for _position, embedding in fixes:
-                    used_embeddings[embedding.name] = embedding
-
-            z = self.process_tokens(tokens, multipliers)
-            zs.append(z)
-
-        if self.return_pooled:
-            return torch.hstack(zs).to(target_device), zs[0].pooled.to(target_device) if zs[0].pooled is not None else None
-        else:
-            return torch.hstack(zs).to(target_device)
+        tokens = self.tokenize_with_weights(texts)
+        return self.encode_token_weights(tokens)
 
     def process_tokens(self, remade_batch_tokens, batch_multipliers):
         try:

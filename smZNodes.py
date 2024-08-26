@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 import re
 import torch
 import inspect
@@ -13,7 +12,7 @@ import comfy.utils
 import comfy.samplers
 from comfy.sd1_clip import unescape_important, escape_important, token_weights
 from .modules import prompt_parser
-from .modules.shared import SimpleNamespaceFast, logger, join_args
+from .modules.shared import SimpleNamespaceFast, Options, logger, join_args
 from .text_processing.textual_inversion import get_valid_embeddings, emb_re_
 from .text_processing.classic_engine import ClassicTextProcessingEngine
 from .text_processing.t5_engine import T5TextProcessingEngine
@@ -101,8 +100,8 @@ def KSampler_sample(*args, **kwargs):
     orig_fn = store.KSampler_sample
     start_step = get_value_from_args(orig_fn, args, kwargs, 'start_step', 6)
     self = get_value_from_args(orig_fn, args, kwargs, 'self')
-    if 'smZ_opts' in self.model_options:
-        self.model_options['smZ_opts'].total_steps = self.steps
+    if Options.KEY in self.model_options:
+        self.model_options[Options.KEY].total_steps = self.steps
     if start_step is None:
         self.model_options.pop('start_step', None)
     else:
@@ -113,9 +112,9 @@ def sample(*args, **kwargs):
     orig_fn = store.sample
     sampler = get_value_from_args(orig_fn, args, kwargs, 'sampler', 6)
     model_options = get_value_from_args(orig_fn, args, kwargs, 'model_options', 8)
-    if 'smZ_opts' in model_options:
+    if Options.KEY in model_options:
         if hasattr(sampler, 'sampler_function'):
-            opts = model_options['smZ_opts']
+            opts = model_options[Options.KEY]
             store.sampler_function = sampler.sampler_function
             sampler_function_sig_params = inspect.signature(sampler.sampler_function).parameters
             params = {x: getattr(opts, x)  for x in ['eta', 's_churn', 's_tmin', 's_tmax', 's_noise'] if x in sampler_function_sig_params}
@@ -131,15 +130,15 @@ def max_denoise(*args, **kwargs):
     base_model = getattr(model_wrap, 'inner_model', None)
     model_options = getattr(model_wrap, 'model_options', getattr(base_model, 'model_options', None))
     res = orig_fn(*args, **kwargs)
-    nm = getattr(model_options.get('smZ_opts', None), 'sgm_noise_multiplier', None) or True
+    nm = getattr(model_options.get(Options.KEY, None), 'sgm_noise_multiplier', None) or True
     res = res if nm else False
     return res
 
 def sampling_function(*args, **kwargs):
     orig_fn = store.sampling_function
     model_options = get_value_from_args(orig_fn, args, kwargs, 'model_options', 6)
-    if 'smZ_opts' in model_options and 'sigmas' in model_options:
-        opts = model_options['smZ_opts']
+    if Options.KEY in model_options and 'sigmas' in model_options:
+        opts = model_options[Options.KEY]
         if opts.s_min_uncond_all or opts.s_min_uncond > 0 or opts.skip_early_cond > 0:
             cond_scale = _cond_scale = get_value_from_args(orig_fn, args, kwargs, 'cond_scale', 5)
             sigmas = model_options['sigmas']
@@ -202,7 +201,8 @@ def HijackClip(clip, mean_normalization):
         for clip_name, inner_store in store_orig.items():
             getattr(inner_store[a2[0]], a2[1]).__self__.unhook()
             for obj, attr in ls:
-                delattr(inner_store[obj], attr)
+                try: delattr(inner_store[obj], attr)
+                except Exception: ...
         del store
         del store_orig
 
@@ -225,7 +225,8 @@ def HijackClipComfy(clip):
     finally:
         for clip_name, inner_store in store_orig.items():
             for obj, attr in ls:
-                delattr(inner_store[obj], attr)
+                try: delattr(inner_store[obj], attr)
+                except Exception: ...
         del store_orig
 
 

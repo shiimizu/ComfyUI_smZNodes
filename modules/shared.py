@@ -33,7 +33,7 @@ if __name__ != "shared":
     xformers_available = model_management.XFORMERS_IS_AVAILABLE
     device = devices.device
 else:
-    vram_state=args= object()
+    vram_state = args = object()
     VRAMState = SimpleNamespaceFast()
     setattr(VRAMState, 'LOW_VRAM', 0)
     setattr(VRAMState, 'NORMAL_VRAM', 1)
@@ -43,8 +43,17 @@ options_templates = {}
 loaded_hypernetworks = []
 
 class Options(SimpleNamespaceFast):
+    KEY = 'smZ_opts'
+
     def clone(self):
         return deepcopy(self)
+
+    def update(self, other):
+        if isinstance(other, dict):
+            self.__dict__ |= other
+        else:
+            self.__dict__ |= other.__dict__
+        return self
 
 opts = Options()
 opts.prompt_attention = 'A1111 parser'

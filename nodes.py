@@ -43,39 +43,20 @@ class smZ_CLIPTextEncode:
                multi_conditioning, use_old_emphasis_implementation,
                with_SDXL, ascore, width, height, crop_w, 
                crop_h, target_width, target_height, text_g, text_l, smZ_steps=1):
-        if parser == 'comfy':
-            with HijackClipComfy(clip) as clip:
-                from nodes import CLIPTextEncode
-                return CLIPTextEncode().encode(clip, text)
-
-        if parser == 'comfy++':
-            with HijackClipComfy(clip) as clip:
-                tokens = clip.tokenize(text)
-            with HijackClip(clip, mean_normalization) as clip:
-                output = clip.encode_from_tokens(tokens, return_pooled=True, return_dict=True)
-            cond = output.pop("cond")
-            return ([[cond, output]], )
-
-        with HijackClip(clip, mean_normalization) as clip:
-            model = lambda txt: clip.encode_from_tokens(clip.tokenize(txt), return_pooled=True, return_dict=True)
-            schedules = prompt_parser.get_learned_conditioning(model, [text], smZ_steps, None, False)
-            schedules_c = convert_schedules_to_comfy(schedules, with_steps=len(schedules[0])>1)
-
         from .modules.shared import opts, opts_default
         debug=opts.debug # get global opts' debug
         if (opts_new := clip.patcher.model_options.get('smZ_opts', None)) is not None:
-            for k,v in opts_new.__dict__.items():
-                setattr(opts, k, v)
+            opts.update(opts_new)
             debug = opts_new.debug
         else:
-            for k,v in opts_default.__dict__.items():
-                setattr(opts, k, v)
+            opts.update(opts_default)
         opts.debug = debug
         opts.prompt_mean_norm = mean_normalization
         opts.use_old_emphasis_implementation = use_old_emphasis_implementation
         opts.multi_conditioning = multi_conditioning
         class_name = clip.cond_stage_model.__class__.__name__ 
         is_sdxl = "SDXL" in class_name
+        on_sdxl = with_SDXL and is_sdxl
         parsers = {
             "full": "Full parser",
             "compel": "Compel parser",
@@ -84,14 +65,38 @@ class smZ_CLIPTextEncode:
             "comfy++": "Comfy++ parser",
         }
         opts.prompt_attention = parsers.get(parser, "Comfy parser")
-        if with_SDXL and is_sdxl:
-            if class_name == "SDXLClipModel":
-                for cc in schedules_c:
-                    for cx in cc: # cc: [[]]
+
+        def comfy_path(clip):
+            nonlocal on_sdxl, class_name, text, ascore, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l
+            if on_sdxl and class_name == "SDXLClipModel":
+                from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
+                return CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
+            elif on_sdxl and class_name == "SDXLRefinerClipModel":
+                from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXLRefiner
+                return CLIPTextEncodeSDXLRefiner().encode(clip, clip, ascore, width, height, text)
+            else:
+                from nodes import CLIPTextEncode
+                return CLIPTextEncode().encode(clip, text)
+
+        if parser == 'comfy':
+            with HijackClipComfy(clip) as clip:
+                return comfy_path(clip)
+        elif parser == 'comfy++':
+            with HijackClip(clip, mean_normalization) as clip:
+                with HijackClipComfy(clip) as clip:
+                    return comfy_path(clip)
+        if on_sdxl:
+            text = text_g
+        with HijackClip(clip, mean_normalization) as clip:
+            model = lambda txt: clip.encode_from_tokens(clip.tokenize(txt), return_pooled=True, return_dict=True)
+            schedules = prompt_parser.get_learned_conditioning(model, [text], smZ_steps, None, False)
+            schedules_c = convert_schedules_to_comfy(schedules, with_steps=len(schedules[0])>1)
+        if on_sdxl:
+            for cc in schedules_c:
+                for cx in cc: # cc: [[]]
+                    if class_name == "SDXLClipModel":
                         cx[1] |= { "width": width, "height": height, "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width, "target_height": target_height}
-            elif class_name == "SDXLRefinerClipModel":
-                for cc in schedules_c:
-                    for cx in cc: # cc: [[]]
+                    elif class_name == "SDXLRefinerClipModel":
                         cx[1] |= {"aesthetic_score": ascore, "width": width,"height": height}
         return tuple(schedules_c)
 
@@ -199,18 +204,15 @@ class smZ_Settings:
         kwargs['eta_noise_seed_delta'] = kwargs.pop('ENSD')
         kwargs['s_tmax'] = kwargs['s_tmax'] or float('inf')
 
-        from .modules.shared import opts_default, opts as opts_global
+        from .modules.shared import Options, opts_default, opts as opts_global
 
-        for k,v in opts_default.__dict__.items():
-            setattr(opts_global, k, v)
-
+        opts_global.update(opts_default)
         opts = opts_default.clone()
-        [kwargs.pop(k, None) for k in [k for k in kwargs.keys() if 'info' in k or 'heading' in k or 'ㅤ' in k]]
-        for k,v in kwargs.items():
-            setattr(opts, k, v)
+        kwargs_new = {k: v for k, v in kwargs.items() if not ('info' in k or 'heading' in k or 'ㅤ' in k)}
+        opts.update(kwargs_new)
 
         first = first.clone()
-        opts_key = 'smZ_opts'
+        opts_key = Options.KEY
         if isinstance(first, comfy.model_patcher.ModelPatcher):
             first.model_options.pop(opts_key, None)
             first.model_options[opts_key] = opts

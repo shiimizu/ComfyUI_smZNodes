@@ -1,5 +1,4 @@
 import torch
-import inspect
 from collections import namedtuple
 from . import parsing, emphasis
 from comfy import model_management
@@ -94,32 +93,41 @@ class T5TextProcessingEngine:
             delattr(self.tokenizer, w)
 
     def tokenize_with_weights(self, texts, return_word_ids=False):
-        return texts
-
-    def encode_token_weights(self, token_weight_pairs):
-        target_device = model_management.text_encoder_device()
-        z = self(token_weight_pairs).to(target_device)
-        return z, None
-
-    def __call__(self, texts):
-        target_device = model_management.text_encoder_device()
-        zs = []
+        tokens_and_weights = []
         cache = {}
         for line in texts:
-            if line in cache:
-                line_z_values = cache[line]
-            else:
+            if line not in cache:
                 chunks, token_count = self.tokenize_line(line)
-                line_z_values = []
+                line_tokens_and_weights = []
                 for chunk in chunks:
                     tokens = chunk.tokens
                     multipliers = chunk.multipliers
-                    z = self.process_tokens([tokens], [multipliers])[0]
-                    line_z_values.append(z)
-                cache[line] = line_z_values
+                    line_tokens_and_weights.append((tokens, multipliers))
+                cache[line] = line_tokens_and_weights
 
-            zs.extend(line_z_values)
-        return torch.stack(zs).to(target_device)
+            tokens_and_weights.extend(cache[line])
+        return tokens_and_weights
+
+    def encode_token_weights(self, token_weight_pairs):
+        if isinstance(token_weight_pairs[0], str):
+            token_weight_pairs = self.tokenize_with_weights(token_weight_pairs)
+        elif isinstance(token_weight_pairs[0], list):
+            token_weight_pairs = list(map(lambda x: (list(map(lambda y: y[0], x)), list(map(lambda y: y[1], x))), token_weight_pairs))
+
+        target_device = model_management.text_encoder_device()
+        zs = []
+        cache = {}
+        for tokens, multipliers in token_weight_pairs:
+            token_key = (tuple(tokens), tuple(multipliers))
+            if token_key not in cache:
+                z = self.process_tokens([tokens], [multipliers])[0]
+                cache[token_key] = z
+            zs.append(cache[token_key])
+        return torch.stack(zs).to(target_device), None
+
+    def __call__(self, texts):
+        tokens = self.tokenize_with_weights(texts)
+        return self.encode_token_weights(tokens)
 
     def process_tokens(self, batch_tokens, batch_multipliers):
         tokens = torch.asarray(batch_tokens)

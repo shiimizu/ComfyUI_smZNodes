@@ -131,7 +131,8 @@ def max_denoise(*args, **kwargs):
     base_model = getattr(model_wrap, 'inner_model', None)
     model_options = getattr(model_wrap, 'model_options', getattr(base_model, 'model_options', None))
     res = orig_fn(*args, **kwargs)
-    res = getattr(model_options.get('smZ_opts', res), 'sgm_noise_multiplier', res)
+    nm = getattr(model_options.get('smZ_opts', None), 'sgm_noise_multiplier', None) or True
+    res = res if nm else False
     return res
 
 def sampling_function(*args, **kwargs):

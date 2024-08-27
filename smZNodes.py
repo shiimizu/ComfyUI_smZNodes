@@ -230,24 +230,46 @@ def HijackClipComfy(clip):
                 except Exception: ...
         del store_orig
 
-
-def transform_schedules(schedules, with_steps=False):
+def transform_schedules(schedules, weight=None):
     end_steps = [schedule.end_at_step for schedule in schedules]
     start_end_pairs = list(zip([0] + end_steps[:-1], end_steps))
-    
+    with_steps = len(schedules[0]) > 1
+    def process(schedule, start_step, end_step):
+        nonlocal with_steps
+        d = schedule.cond.copy()
+        d.pop('cond', None)
+        if with_steps:
+            d |= ({
+                "start_step": start_step,
+                "end_step": end_step,
+            } | ({"weight": weight} if weight is not None else {}))
+        return d
     return [
         [
-            schedule.cond.pop("cond", None),
-            schedule.cond | {
-                "start_step": start_step,
-                "end_step": end_step
-            } if with_steps else schedule.cond
+            schedule.cond.get("cond", None),
+            process(schedule, start_step, end_step)
         ]
         for schedule, (start_step, end_step) in zip(schedules, start_end_pairs)
     ]
 
-def convert_schedules_to_comfy(schedules, with_steps=False):
-    return [transform_schedules(sublist, with_steps) for sublist in schedules]
+def flatten(nested_list):
+    return [item for sublist in nested_list for item in sublist]
+
+def convert_schedules_to_comfy(schedules, multi=False):
+    if multi:
+        out = [list(map(lambda x: transform_schedules(x.schedules, x.weight), bb)) for bb in schedules.batch]
+        out = flatten(out)
+    else:
+        out = [transform_schedules(sublist) for sublist in schedules]
+    return flatten(out)
+
+def get_learned_conditioning(model, prompts, steps, multi=False, *args, **kwargs):
+    if multi:
+        schedules = prompt_parser.get_multicond_learned_conditioning(model, prompts, steps, *args, **kwargs)
+    else:
+        schedules = prompt_parser.get_learned_conditioning(model, prompts, steps, *args, **kwargs)
+    schedules_c = convert_schedules_to_comfy(schedules, multi)
+    return schedules_c
 
 def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     '''

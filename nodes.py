@@ -8,7 +8,7 @@ import comfy.sd
 import comfy.model_management
 import comfy.samplers
 from .modules.shared import logger
-from .smZNodes import HijackClip, HijackClipComfy, convert_schedules_to_comfy
+from .smZNodes import HijackClip, HijackClipComfy, get_learned_conditioning
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -18,7 +18,7 @@ class smZ_CLIPTextEncode:
                 "clip": ("CLIP", ),
                 "parser": (["comfy", "comfy++", "A1111", "full", "compel", "fixed attention"],{"default": "comfy"}),
                 "mean_normalization": ("BOOLEAN", {"default": True, "tooltip": "Toggles whether weights are normalized by taking the mean"}),
-                "multi_conditioning": ("BOOLEAN", {"default": False}),
+                "multi_conditioning": ("BOOLEAN", {"default": True}),
                 "use_old_emphasis_implementation": ("BOOLEAN", {"default": False}),
                 "with_SDXL": ("BOOLEAN", {"default": False}),
                 "ascore": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
@@ -89,16 +89,15 @@ class smZ_CLIPTextEncode:
             text = text_g
         with HijackClip(clip, mean_normalization) as clip:
             model = lambda txt: clip.encode_from_tokens(clip.tokenize(txt), return_pooled=True, return_dict=True)
-            schedules = prompt_parser.get_learned_conditioning(model, [text], smZ_steps, None, False)
-            schedules_c = convert_schedules_to_comfy(schedules, with_steps=len(schedules[0])>1)
+            schedules = get_learned_conditioning(model, [text], smZ_steps, multi_conditioning)
         if on_sdxl:
-            for cc in schedules_c:
+            for cc in schedules:
                 for cx in cc: # cc: [[]]
                     if class_name == "SDXLClipModel":
                         cx[1] |= { "width": width, "height": height, "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width, "target_height": target_height}
                     elif class_name == "SDXLRefinerClipModel":
                         cx[1] |= {"aesthetic_score": ascore, "width": width,"height": height}
-        return tuple(schedules_c)
+        return (schedules, )
 
 # Hack: string type that is always equal in not equal comparisons
 class AnyType(str):
@@ -177,21 +176,21 @@ class smZ_Settings:
             "info_debug": ("STRING", {"multiline": True, "placeholder": "Debugging messages in the console."}),
             "debug": ("BOOLEAN", {"default": opts.debug, "label_on": "on", "label_off": "off", "tooltip": "Debugging messages in the console."}),
         }
-        # i = -1
-        return {"required": {
-                                "*": (anytype, {"forceInput": True}),
-                                },
-                "optional": {
-                    # "extra": ("STRING", {"multiline": True, "default": json.dumps(optional)}),
-                    "extra": ("STRING", {"multiline": True, "default": '{"show_headings":true,"show_descriptions":false,"mode":"*"}'}),
-                    **optional
-                }}
+        return {
+            "required": {
+                "*": (anytype, {"forceInput": True}),
+            },
+            "optional": {
+                "extra": ("STRING", {"multiline": True, "default": '{"show_headings":true,"show_descriptions":false,"mode":"*"}'}),
+                **optional,
+            },
+        }
     RETURN_TYPES = (anytype,)
-    FUNCTION = "run"
+    FUNCTION = "apply"
     CATEGORY = "advanced"
     OUTPUT_TOOLTIPS = ("The model used for denoising latents.",)
 
-    def run(self, *args, **kwargs):
+    def apply(self, *args, **kwargs):
         first = kwargs.pop('*', None) if '*' in kwargs else args[0]
         if not hasattr(first, 'clone') or first is None: return (first,)
 

@@ -131,7 +131,7 @@ def max_denoise(*args, **kwargs):
     base_model = getattr(model_wrap, 'inner_model', None)
     model_options = getattr(model_wrap, 'model_options', getattr(base_model, 'model_options', None))
     res = orig_fn(*args, **kwargs)
-    nm = getattr(model_options.get(Options.KEY, None), 'sgm_noise_multiplier', None) or True
+    nm = getattr(model_options.get(Options.KEY, True), 'sgm_noise_multiplier', True)
     res = res if nm else False
     return res
 

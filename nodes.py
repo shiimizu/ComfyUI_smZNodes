@@ -8,6 +8,7 @@ import comfy.model_management
 import comfy.samplers
 from .modules.shared import logger
 from .smZNodes import HijackClip, HijackClipComfy, get_learned_conditioning
+from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
 
 class smZ_CLIPTextEncode:
     @classmethod
@@ -68,7 +69,6 @@ class smZ_CLIPTextEncode:
         def _comfy_path(clip, text):
             nonlocal on_sdxl, class_name, ascore, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l
             if on_sdxl and class_name == "SDXLClipModel":
-                from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
                 return CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
             elif on_sdxl and class_name == "SDXLRefinerClipModel":
                 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXLRefiner
@@ -88,25 +88,25 @@ class smZ_CLIPTextEncode:
                 else:
                     return _comfy_path(clip, text)
 
-        if parser == 'comfy':
+        if parser == "comfy":
             with HijackClipComfy(clip) as clip:
                 return comfy_path(clip)
-        elif parser == 'comfy++':
+        elif parser == "comfy++":
             with HijackClip(clip, mean_normalization) as clip:
                 with HijackClipComfy(clip) as clip:
                     return comfy_path(clip)
-        if on_sdxl:
-            text = text_g
+
         with HijackClip(clip, mean_normalization) as clip:
             model = lambda txt: clip.encode_from_tokens(clip.tokenize(txt), return_pooled=True, return_dict=True)
-            schedules = get_learned_conditioning(model, [text], smZ_steps, multi_conditioning)
-        if on_sdxl:
-            for cc in schedules:
-                for cx in cc: # cc: [[]]
-                    if class_name == "SDXLClipModel":
-                        cx[1] |= { "width": width, "height": height, "crop_w": crop_w, "crop_h": crop_h, "target_width": target_width, "target_height": target_height}
-                    elif class_name == "SDXLRefinerClipModel":
-                        cx[1] |= {"aesthetic_score": ascore, "width": width,"height": height}
+            steps = max(smZ_steps, 1)
+            if on_sdxl and class_name == "SDXLClipModel":
+                # skip prompt-editing
+                schedules = CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, [text_g], [text_l])[0]
+            else:
+                schedules = get_learned_conditioning(model, [text], steps, multi_conditioning)
+        if on_sdxl and class_name == "SDXLRefinerClipModel":
+            for cx in schedules:
+                cx[1] |= {"aesthetic_score": ascore, "width": width,"height": height}
         return (schedules, )
 
 # Hack: string type that is always equal in not equal comparisons

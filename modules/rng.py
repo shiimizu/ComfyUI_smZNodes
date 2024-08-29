@@ -3,18 +3,6 @@ import numpy as np
 from comfy.model_patcher import ModelPatcher
 from . import shared, rng_philox
 
-def randn_without_seed(x, generator=None, randn_source="cpu"):
-    """Generate a tensor with random numbers from a normal distribution using the previously initialized genrator.
-
-    Use either randn() or manual_seed() to initialize the generator."""
-    if randn_source == "nv":
-        return torch.asarray(generator.randn(x.size()), device=x.device)
-    else:
-        if generator is not None and generator.device.type == "cpu":
-            return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device='cpu', generator=generator).to(device=x.device)
-        else:
-            return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=x.device, generator=generator)
-
 class TorchHijack:
     """This is here to replace torch.randn_like of k-diffusion.
 
@@ -24,7 +12,6 @@ class TorchHijack:
     We need to replace to make images generated in batches to be same as images generated individually."""
 
     def __init__(self, generator, randn_source):
-        # self.rng = p.rng
         self.generator = generator
         self.randn_source = randn_source
 
@@ -40,21 +27,14 @@ class TorchHijack:
     def randn_like(self, x):
         return randn_without_seed(x, generator=self.generator, randn_source=self.randn_source)
 
-def _find_outer_instance(target:str, target_type=None, callback=None):
-    import inspect
-    frame = inspect.currentframe()
-    i = 0
-    while frame and i < 10:
-        if target in frame.f_locals:
-            if callback is not None:
-                return callback(frame)
-            else:
-                found = frame.f_locals[target]
-                if isinstance(found, target_type):
-                    return found
-        frame = frame.f_back
-        i += 1
-    return None
+def randn_without_seed(x, generator=None, randn_source="cpu"):
+    """Generate a tensor with random numbers from a normal distribution using the previously initialized genrator.
+
+    Use either randn() or manual_seed() to initialize the generator."""
+    if randn_source == "nv":
+        return torch.asarray(generator.randn(x.size()), device=x.device)
+    else:
+        return torch.randn(x.size(), dtype=x.dtype, layout=x.layout, device=generator.device, generator=generator).to(device=x.device)
 
 def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     """
@@ -68,7 +48,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         guider = _find_outer_instance('guider', comfy.samplers.CFGGuider)
         model = getattr(guider, 'model_patcher', None)
     if (model is not None and (opts:=model.model_options.get(shared.Options.KEY, None)) is None) or opts is None:
-        opts = shared.opts_default.clone()
+        opts = shared.opts_default
         device = 'cpu'
 
     if opts.randn_source == 'gpu':
@@ -76,12 +56,11 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         device = comfy.model_management.get_torch_device()
 
     def get_generator(seed):
-        nonlocal device
-        nonlocal opts
-        _generator = torch.Generator(device=device)
-        generator = _generator.manual_seed(seed)
+        nonlocal device, opts
         if opts.randn_source == 'nv':
             generator = rng_philox.Generator(seed)
+        else:
+            generator = torch.Generator(device=device).manual_seed(seed)
         return generator
     generator = generator_eta = get_generator(seed)
 
@@ -114,6 +93,18 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     noises = torch.cat(noises, axis=0)
     return noises
 
-def hook_prepare_noise():
-    import comfy.sample
-    comfy.sample.prepare_noise = prepare_noise
+def _find_outer_instance(target:str, target_type=None, callback=None, max_len=10):
+    import inspect
+    frame = inspect.currentframe()
+    i = 0
+    while frame and i < max_len:
+        if target in frame.f_locals:
+            if callback is not None:
+                return callback(frame)
+            else:
+                found = frame.f_locals[target]
+                if isinstance(found, target_type):
+                    return found
+        frame = frame.f_back
+        i += 1
+    return None

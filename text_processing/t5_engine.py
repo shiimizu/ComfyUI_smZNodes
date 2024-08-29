@@ -22,6 +22,7 @@ class T5TextProcessingEngine:
     def __init__(self, text_encoder, tokenizer, emphasis_name="Original", min_length=256):
         super().__init__()
         populate_self_variables(self, tokenizer)
+        self._tokenizer = tokenizer
 
         self.text_encoder = text_encoder
 
@@ -29,6 +30,24 @@ class T5TextProcessingEngine:
         self.min_length = self.min_length or self.max_length
         self.id_end = self.end_token
         self.id_pad = self.pad_token
+        vocab = self.tokenizer.get_vocab()
+        self.comma_token = vocab.get(',</w>', None)
+        self.token_mults = {}
+        tokens_with_parens = [(k, v) for k, v in vocab.items() if '(' in k or ')' in k or '[' in k or ']' in k]
+        for text, ident in tokens_with_parens:
+            mult = 1.0
+            for c in text:
+                if c == '[':
+                    mult /= 1.1
+                if c == ']':
+                    mult *= 1.1
+                if c == '(':
+                    mult *= 1.1
+                if c == ')':
+                    mult /= 1.1
+
+            if mult != 1.0:
+                self.token_mults[ident] = mult
         self.tokenizer._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
         
 
@@ -89,8 +108,8 @@ class T5TextProcessingEngine:
  
     def unhook(self):
         w = '_eventual_warn_about_too_long_sequence'
-        if hasattr(self.tokenizer, w):
-            delattr(self.tokenizer, w)
+        if hasattr(self.tokenizer, w): delattr(self.tokenizer, w)
+        if hasattr(self._tokenizer, w): delattr(self._tokenizer, w)
 
     def tokenize_with_weights(self, texts, return_word_ids=False):
         tokens_and_weights = []

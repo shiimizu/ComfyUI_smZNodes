@@ -17,6 +17,7 @@ import comfy.samplers
 from comfy.sd1_clip import unescape_important, escape_important, token_weights
 from .modules import prompt_parser
 from .modules.shared import SimpleNamespaceFast, Options, logger, join_args
+from .modules.sd_hijack_clip_old import process_texts_past
 from .text_processing.textual_inversion import get_valid_embeddings, emb_re_
 from .text_processing.classic_engine import ClassicTextProcessingEngine
 from .text_processing.t5_engine import T5TextProcessingEngine
@@ -175,7 +176,7 @@ def sampling_function(*args, **kwargs):
 
 
 @contextlib.contextmanager
-def HijackClip(clip, mean_normalization):
+def HijackClip(clip, opts):
     a1 = 'tokenizer', 'tokenize_with_weights'
     a2 = 'cond_stage_model', 'encode_token_weights'
     ls = [a1, a2]
@@ -192,7 +193,7 @@ def HijackClip(clip, mean_normalization):
         for clip_name, inner_store in store_orig.items():
             text_encoder = inner_store['cond_stage_model']
             tokenizer = inner_store['tokenizer']
-            emphasis_name = 'Original' if mean_normalization else "No norm"
+            emphasis_name = 'Original' if opts.prompt_mean_norm else "No norm"
             if 't5' in clip_name:
                 text_processing_engine = T5TextProcessingEngine(
                     text_encoder=text_encoder,
@@ -205,6 +206,8 @@ def HijackClip(clip, mean_normalization):
                     tokenizer=tokenizer,
                     emphasis_name=emphasis_name,
                 )
+            text_processing_engine.opts = opts
+            text_processing_engine.process_texts_past = partial(process_texts_past, text_processing_engine)
             store[clip_name] = text_processing_engine
             for obj, attr in ls:
                 setattr(inner_store[obj], attr, getattr(store[clip_name], attr))

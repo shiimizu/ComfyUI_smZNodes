@@ -1,11 +1,9 @@
-from . import sd_hijack_clip
-from . import shared
+import logging
 
-
-def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, texts):
+def process_text_old(self, texts):
     id_start = self.id_start
     id_end = self.id_end
-    maxlen = self.wrapped.max_length  # you get to stay at 77
+    maxlen = self.max_length  # you get to stay at 77
     used_custom_terms = []
     remade_batch_tokens = []
     hijack_comments = []
@@ -32,7 +30,7 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
             while i < len(tokens):
                 token = tokens[i]
 
-                embedding, embedding_length_in_tokens = self.hijack.embedding_db.find_embedding_at_position(tokens, i)
+                embedding, embedding_length_in_tokens = self.embeddings.find_embedding_at_position(tokens, i)
                 if isinstance(embedding, dict):
                     if 'open' in self.__class__.__name__.lower():
                         embedding = embedding.get('g', embedding)
@@ -40,7 +38,7 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
                         embedding.pop('g', None)
                         embedding = next(iter(embedding.values()))
 
-                mult_change = self.token_mults.get(token) if shared.opts.enable_emphasis else None
+                mult_change = self.token_mults.get(token) if self.opts.enable_emphasis else None
                 if mult_change is not None:
                     mult *= mult_change
                     i += 1
@@ -59,11 +57,11 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
                     i += embedding_length_in_tokens
 
             if len(remade_tokens) > maxlen - 2:
-                vocab = {v: k for k, v in self.wrapped.tokenizer.get_vocab().items()}
+                vocab = {v: k for k, v in self.tokenizer.get_vocab().items()}
                 ovf = remade_tokens[maxlen - 2:]
                 overflowing_words = [vocab.get(int(x), "") for x in ovf]
-                overflowing_text = self.wrapped.tokenizer.convert_tokens_to_string(''.join(overflowing_words))
-                hijack_comments.append(f"Warning: too many input tokens; some ({len(overflowing_words)}) have been truncated:\n{overflowing_text}\n")
+                overflowing_text = self.tokenizer.convert_tokens_to_string(''.join(overflowing_words))
+                logging.warning(f"\033[33mWarning:\033[0m too many input tokens; some ({len(overflowing_words)}) have been truncated:\n{overflowing_text}\n")
 
             token_count = len(remade_tokens)
             remade_tokens = remade_tokens + [id_end] * (maxlen - 2 - len(remade_tokens))
@@ -83,12 +81,12 @@ def process_text_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase,
     return batch_multipliers, batch_multipliers_solo_emb, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, token_count
 
 
-def forward_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, texts):
+def forward_old(self, texts):
     batch_multipliers, batch_multipliers_solo_emb, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, _token_count = process_text_old(self, texts)
 
     chunk_count = max([len(x) for x in remade_batch_tokens])
 
-    if shared.opts.return_batch_chunks:
+    if self.opts.return_batch_chunks:
         return (remade_batch_tokens, chunk_count)
 
     self.hijack.comments += hijack_comments
@@ -99,3 +97,7 @@ def forward_old(self: sd_hijack_clip.FrozenCLIPEmbedderWithCustomWordsBase, text
 
     self.hijack.fixes = hijack_fixes
     return self.process_tokens(remade_batch_tokens, batch_multipliers, batch_multipliers_solo_emb)
+
+def process_texts_past(self, texts):
+    batch_multipliers, batch_multipliers_solo_emb, remade_batch_tokens, used_custom_terms, hijack_comments, hijack_fixes, _token_count = process_text_old(self, texts)
+    return [(remade_batch_tokens, batch_multipliers)]

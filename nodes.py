@@ -92,11 +92,11 @@ class smZ_CLIPTextEncode:
             with HijackClipComfy(clip) as clip:
                 return comfy_path(clip)
         elif parser == "comfy++":
-            with HijackClip(clip, mean_normalization) as clip:
+            with HijackClip(clip, opts) as clip:
                 with HijackClipComfy(clip) as clip:
                     return comfy_path(clip)
 
-        with HijackClip(clip, mean_normalization) as clip:
+        with HijackClip(clip, opts) as clip:
             model = lambda txt: clip.encode_from_tokens(clip.tokenize(txt), return_pooled=True, return_dict=True)
             steps = max(smZ_steps, 1)
             if on_sdxl and class_name == "SDXLClipModel":

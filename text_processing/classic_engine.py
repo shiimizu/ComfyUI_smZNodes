@@ -65,6 +65,7 @@ class ClassicTextProcessingEngine:
     ):
         super().__init__()
         populate_self_variables(self, tokenizer)
+        self._tokenizer = tokenizer
 
         self.embeddings = EmbeddingDatabase(self.tokenizer, embedding_expected_shape)
 
@@ -91,6 +92,21 @@ class ClassicTextProcessingEngine:
         model_embeddings.token_embedding.current_embeds = backup_embeds
 
         vocab = self.tokenizer.get_vocab()
+        self.token_mults = {}
+        tokens_with_parens = [(k, v) for k, v in vocab.items() if '(' in k or ')' in k or '[' in k or ']' in k]
+        for text, ident in tokens_with_parens:
+            mult = 1.0
+            for c in text:
+                if c == '[':
+                    mult /= 1.1
+                if c == ']':
+                    mult *= 1.1
+                if c == '(':
+                    mult *= 1.1
+                if c == ')':
+                    mult /= 1.1
+            if mult != 1.0:
+                self.token_mults[ident] = mult
 
         self.comma_token = vocab.get(',</w>', None)
         self.tokenizer._eventual_warn_about_too_long_sequence = lambda *args, **kwargs: None
@@ -99,8 +115,8 @@ class ClassicTextProcessingEngine:
         self.text_encoder.transformer.text_model.embeddings.token_embedding = self.text_encoder.transformer.text_model.embeddings.token_embedding.wrapped
         del self._try_get_embedding
         w = '_eventual_warn_about_too_long_sequence'
-        if hasattr(self.tokenizer, w):
-            delattr(self.tokenizer, w)
+        if hasattr(self.tokenizer, w): delattr(self.tokenizer, w)
+        if hasattr(self._tokenizer, w): delattr(self._tokenizer, w)
 
     def empty_chunk(self):
         chunk = PromptChunk()
@@ -116,6 +132,8 @@ class ClassicTextProcessingEngine:
         return tokenized
     
     def tokenize_with_weights(self, texts, return_word_ids=False):
+        if self.opts.use_old_emphasis_implementation:
+            return self.process_texts_past(texts)
         batch_chunks, token_count = self.process_texts(texts)
 
         used_embeddings = {}
@@ -269,7 +287,7 @@ class ClassicTextProcessingEngine:
         tokens = self.tokenize_with_weights(texts)
         return self.encode_token_weights(tokens)
 
-    def process_tokens(self, remade_batch_tokens, batch_multipliers):
+    def process_tokens(self, remade_batch_tokens, batch_multipliers, *args, **kwargs):
         try:
             tokens = torch.asarray(remade_batch_tokens)
 

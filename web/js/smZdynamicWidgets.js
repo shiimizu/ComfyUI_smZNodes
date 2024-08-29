@@ -478,11 +478,14 @@ _app.registerExtension({
                         for (let i = 0; i < this.outputs[index].links.length - 1; i++) {
                             const linkId = this.outputs[index].links[i];
                             const link = app.graph.links[linkId];
-                            linksToDisconnect.push(link);
+                            if (link)
+                                linksToDisconnect.push(link);
                         }
                         for (const link of linksToDisconnect) {
-                            const node = app.graph.getNodeById(link.target_id);
-                            node.disconnectInput(link.target_slot);
+                            if (link) {
+                                const node = app.graph.getNodeById(link.target_id);
+                                node.disconnectInput(link.target_slot);
+                            }
                         }
                     }
                 }

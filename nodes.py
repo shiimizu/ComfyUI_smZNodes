@@ -1,7 +1,6 @@
-import os
+import re
 import logging
-from pathlib import Path
-from .modules import prompt_parser
+from itertools import chain
 from nodes import MAX_RESOLUTION
 import comfy.model_patcher
 import comfy.sd
@@ -66,8 +65,8 @@ class smZ_CLIPTextEncode:
         }
         opts.prompt_attention = parsers.get(parser, "Comfy parser")
 
-        def comfy_path(clip):
-            nonlocal on_sdxl, class_name, text, ascore, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l
+        def _comfy_path(clip, text):
+            nonlocal on_sdxl, class_name, ascore, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l
             if on_sdxl and class_name == "SDXLClipModel":
                 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
                 return CLIPTextEncodeSDXL().encode(clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
@@ -77,6 +76,17 @@ class smZ_CLIPTextEncode:
             else:
                 from nodes import CLIPTextEncode
                 return CLIPTextEncode().encode(clip, text)
+
+        def comfy_path(clip):
+            nonlocal text
+            if on_sdxl and class_name == "SDXLRefinerClipModel":
+                return _comfy_path(clip, text)
+            else:
+                if multi_conditioning:
+                    prompts = re.compile(r"\bAND\b").split(text)
+                    return (list(chain(*(_comfy_path(clip, prompt)[0] for prompt in prompts))), )
+                else:
+                    return _comfy_path(clip, text)
 
         if parser == 'comfy':
             with HijackClipComfy(clip) as clip:

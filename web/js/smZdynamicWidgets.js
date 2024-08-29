@@ -88,7 +88,7 @@ export function widgetLogic(node, widget) {
     const wname = widget.name
     if (wname.endsWith("parser")) {
         const in_comfy = widget?.value?.includes?.("comfy")
-        toggleMenuOption(node, ['multi_conditioning', wname], !in_comfy)
+        // toggleMenuOption(node, ['multi_conditioning', wname], !in_comfy)
         toggleMenuOption(node, ['mean_normalization', wname], widget.value !== "comfy")
         const uoei = 'use_old_emphasis_implementation'
         if (findWidgetsByName(node, uoei)?.some(x => x?.value))
@@ -97,6 +97,7 @@ export function widgetLogic(node, widget) {
             toggleMenuOption(node, [uoei, wname], false)
     } else if (wname.endsWith("with_SDXL")) {
         toggleMenuOption(node, ['text', wname], !widget.value)
+        toggleMenuOption(node, ['multi_conditioning', wname], !widget.value)
 
         // Resize node when widget is set to false
         if (!widget.value) {
@@ -689,7 +690,7 @@ _app.registerExtension({
                     const parser = node.widgets.find(w => w.name.endsWith('parser'))
                     const in_comfy = parser?.value?.includes?.("comfy")
                     let ws = widgets.map(widget_name => create_custom_option(content_hide_show + widget_name, toggleMenuOption.bind(this, node, widget_name)))
-                    ws = ws.filter((w) => (in_comfy && parser.value !== 'comfy' && w.content.includes('mean_normalization')) || (in_comfy && w.content.includes('with_SDXL')) || !in_comfy )
+                    ws = ws.filter((w) => (in_comfy && parser.value !== 'comfy' && w.content.includes('mean_normalization')) || (in_comfy && w.content.includes('with_SDXL')) || !in_comfy || w.content.includes('multi_conditioning') )
                     // customOptions.push(null) // seperator
                     customOptions.push(...ws)
 

@@ -5,7 +5,10 @@ import inspect
 import contextlib
 import logging
 import comfy
+import math
+import ctypes
 from functools import partial
+from random import getrandbits
 import comfy.sdxl_clip
 import comfy.sd1_clip
 import comfy.sample
@@ -23,6 +26,7 @@ class Store(SimpleNamespaceFast): ...
 store = Store()
 
 def register_hooks():
+    from .modules.rng import prepare_noise
     patches = [
         (comfy.samplers, 'calc_cond_batch', calc_cond_batch),
         (comfy.samplers, 'get_area_and_mult', get_area_and_mult),
@@ -31,12 +35,13 @@ def register_hooks():
         (comfy.samplers, 'sample', sample),
         (comfy.samplers.Sampler, 'max_denoise', max_denoise),
         (comfy.samplers, 'sampling_function', sampling_function),
+        (comfy.sample, 'prepare_noise', prepare_noise),
     ]
     for parent, fn_name, fn_patch in patches:
+        if not hasattr(parent, f"_{fn_name}"):
+            setattr(store, f"_{fn_name}", getattr(parent, fn_name))
         setattr(store, fn_patch.__name__, getattr(parent, fn_name))
         setattr(parent, fn_name, fn_patch)
-    from .modules.rng import hook_prepare_noise
-    hook_prepare_noise()
 
 def iter_items(d):
     for key, value in d.items():
@@ -72,29 +77,30 @@ def get_value_from_args(fn, args, kwargs, key_to_lookup, idx=None):
     return value
 
 def calc_cond_batch(*args, **kwargs):
-    x_in = kwargs['x_in'] if 'x_in' in kwargs else args[2]
-    model_options = kwargs['model_options'] if 'model_options' in kwargs else args[4]
+    x_in = args[2]
+    model_options = args[4]
     if not hasattr(x_in, 'model_options'):
         x_in.model_options = model_options
     return store.calc_cond_batch(*args, **kwargs)
 
 def get_area_and_mult(*args, **kwargs):
-    x_in = kwargs['x_in'] if 'x_in' in kwargs else args[1]
+    x_in = args[1]
     if (model_options:=getattr(x_in, 'model_options', None)) is not None and 'sigmas' in model_options:
-        conds = kwargs['conds'] if 'conds' in kwargs else args[0]
-        timestep_in = kwargs['timestep_in'] if 'timestep_in' in kwargs else args[2]
-        sigmas = model_options['sigmas']
-        ts_in = find_nearest(timestep_in, sigmas)
-        cur_i = min(len(sigmas)-1, (sigmas==ts_in[0]).nonzero().item() + model_options.get('start_step', 0))
+        conds = args[0]
         if 'start_step' in conds and 'end_step' in conds:
+            timestep_in = args[2]
+            sigmas = model_options['sigmas']
+            ts_in = find_nearest(timestep_in, sigmas)
+            step = ss[0].item() if (ss:=(sigmas == ts_in[0]).nonzero()).shape[0] != 0 else 0
+            cur_i = min(len(sigmas)-1, step + model_options.get('start_step', 0))
             if not (cur_i >= conds['start_step'] and cur_i < conds['end_step']):
                 return None
     return store.get_area_and_mult(*args, **kwargs)
 
 def KSamplerX0Inpaint___call__(*args, **kwargs):
-    self = kwargs['self'] if 'self' in kwargs else args[0]
+    self = args[0]
     model_options = kwargs['model_options'] if 'model_options' in kwargs else args[4]
-    model_options |= {'sigmas': self.sigmas}
+    model_options['sigmas'] = self.sigmas
     return store.KSamplerX0Inpaint___call__(*args, **kwargs)
 
 def KSampler_sample(*args, **kwargs):
@@ -106,7 +112,7 @@ def KSampler_sample(*args, **kwargs):
     if start_step is None:
         self.model_options.pop('start_step', None)
     else:
-        self.model_options |= {'start_step': start_step}
+        self.model_options['start_step'] = start_step
     return orig_fn(*args, **kwargs)
 
 def sample(*args, **kwargs):
@@ -130,14 +136,13 @@ def max_denoise(*args, **kwargs):
     model_wrap = get_value_from_args(orig_fn, args, kwargs, 'model_wrap', 1)
     base_model = getattr(model_wrap, 'inner_model', None)
     model_options = getattr(model_wrap, 'model_options', getattr(base_model, 'model_options', None))
-    res = orig_fn(*args, **kwargs)
-    nm = getattr(model_options.get(Options.KEY, True), 'sgm_noise_multiplier', True)
-    res = res if nm else False
-    return res
+    return orig_fn(*args, **kwargs) if getattr(model_options.get(Options.KEY, True), 'sgm_noise_multiplier', True) else False
 
 def sampling_function(*args, **kwargs):
     orig_fn = store.sampling_function
     model_options = get_value_from_args(orig_fn, args, kwargs, 'model_options', 6)
+    model_options=model_options.copy()
+    kwargs['model_options'] = model_options
     if Options.KEY in model_options and 'sigmas' in model_options:
         opts = model_options[Options.KEY]
         if opts.s_min_uncond_all or opts.s_min_uncond > 0 or opts.skip_early_cond > 0:
@@ -145,23 +150,29 @@ def sampling_function(*args, **kwargs):
             sigmas = model_options['sigmas']
             sigma = get_value_from_args(orig_fn, args, kwargs, 'timestep', 2)
             ts_in = find_nearest(sigma, sigmas)
-            step = min(len(sigmas)-1, (sigmas==ts_in[0]).nonzero().item() + model_options.get('start_step', 0))
+            step = ss[0].item() if (ss:=(sigmas == ts_in[0]).nonzero()).shape[0] != 0 else 0
+            step = min(len(sigmas)-1, step + model_options.get('start_step', 0))
             total_steps = getattr(opts, 'total_steps', len(sigmas))
-            skip_uncond = False
 
             if opts.skip_early_cond > 0 and step / total_steps <= opts.skip_early_cond:
-                skip_uncond = True
+                cond_scale = True
             elif (step % 2 or opts.s_min_uncond_all) and opts.s_min_uncond > 0 and sigma[0] < opts.s_min_uncond:
-                skip_uncond = True
+                cond_scale = True
 
-            if skip_uncond:
-                cond_scale = 1.0
-            
-            if _cond_scale != cond_scale:
+            if cond_scale != _cond_scale:
                 if 'cond_scale' not in kwargs:
                     args = args[:5]
                 kwargs['cond_scale'] = cond_scale
-    return orig_fn(*args, **kwargs)
+
+    cond = get_value_from_args(orig_fn, args, kwargs, 'cond', 4)
+    weights = [x.get('weight', None) for x in cond]
+    has_some = any(item is not None for item in weights) and len(weights) > 1
+    if has_some:
+        out = CFGDenoiser(orig_fn).sampling_function(*args, **kwargs)
+    else:
+        out = orig_fn(*args, **kwargs)
+    return out
+
 
 @contextlib.contextmanager
 def HijackClip(clip, mean_normalization):
@@ -220,8 +231,7 @@ def HijackClipComfy(clip):
                     if clip_name not in store_orig:
                         store_orig[clip_name] = {}
                     store_orig[clip_name][obj] = v
-                    for obj, attr in ls:
-                        setattr(v, attr, partial(tokenize_with_weights_custom, v))
+                    setattr(v, attr, partial(tokenize_with_weights_custom, v))
         yield clip
     finally:
         for clip_name, inner_store in store_orig.items():
@@ -230,19 +240,19 @@ def HijackClipComfy(clip):
                 except Exception: ...
         del store_orig
 
-def transform_schedules(schedules, weight=None):
+def transform_schedules(schedules, weight=None, with_weight=False):
     end_steps = [schedule.end_at_step for schedule in schedules]
     start_end_pairs = list(zip([0] + end_steps[:-1], end_steps))
-    with_steps = len(schedules[0]) > 1
+    with_steps = len(schedules) > 1
+
     def process(schedule, start_step, end_step):
         nonlocal with_steps
         d = schedule.cond.copy()
         d.pop('cond', None)
         if with_steps:
-            d |= ({
-                "start_step": start_step,
-                "end_step": end_step,
-            } | ({"weight": weight} if weight is not None else {}))
+            d |= {"start_step": start_step, "end_step": end_step}
+        if weight is not None and with_weight:
+            d['weight'] = weight
         return d
     return [
         [
@@ -257,7 +267,7 @@ def flatten(nested_list):
 
 def convert_schedules_to_comfy(schedules, multi=False):
     if multi:
-        out = [list(map(lambda x: transform_schedules(x.schedules, x.weight), bb)) for bb in schedules.batch]
+        out = [[transform_schedules(x.schedules, x.weight, len(batch)>1) for x in batch] for batch in schedules.batch]
         out = flatten(out)
     else:
         out = [transform_schedules(sublist) for sublist in schedules]
@@ -270,6 +280,182 @@ def get_learned_conditioning(model, prompts, steps, multi=False, *args, **kwargs
         schedules = prompt_parser.get_learned_conditioning(model, prompts, steps, *args, **kwargs)
     schedules_c = convert_schedules_to_comfy(schedules, multi)
     return schedules_c
+
+class CustomList(list):
+    def __init__(self, *args):
+        super().__init__(*args)
+    def __setattr__(self, name: str, value: re.Any):
+        super().__setattr__(name, value)
+        return self
+
+def modify_locals_values(frame, fn):
+        try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+        except Exception: ...
+        fn(frame)
+        try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+        except Exception: ...
+
+def update_locals(frame,k,v,list_app=False):
+    # https://stackoverflow.com/a/34671307
+    if not list_app:
+        modify_locals_values(frame, lambda _frame: _frame.f_locals.__setitem__(k, v))
+    else:
+        if not isinstance(frame.f_locals[k], CustomList):
+            out_conds_store = CustomList([])
+            out_conds_store.outputs=[]
+            modify_locals_values(frame, lambda _frame: _frame.f_locals.__setitem__(k, out_conds_store))
+        v.area = frame.f_locals['area']
+        v.mult = frame.f_locals['mult']
+        frame.f_locals[k].outputs.append(v)
+        frame.f_locals[k].out_conds = frame.f_locals['out_conds']
+        frame.f_locals[k].out_counts = frame.f_locals['out_counts']
+        modify_locals_values(frame, lambda _frame: _frame.f_locals.__setitem__('batch_chunks', 0))
+
+def model_function_wrapper_cd(model, args, model_options, id):
+    input_x = args['input']
+    timestep_ = args['timestep']
+    c = args['c']
+    cond_or_uncond = args['cond_or_uncond']
+    batch_chunks = len(cond_or_uncond)
+    if f'model_function_wrapper_{id}' in model_options:
+        output = model_options[f'model_function_wrapper_{id}'](model, args)
+    else:
+        output = model(input_x, timestep_, **c)
+    output.cond_or_uncond = cond_or_uncond
+    output.batch_chunks = batch_chunks
+    output.output_chunks = output.chunk(batch_chunks)
+    output.chunk = lambda *aa, **kw: output
+    get_parent_variable('out_conds', list, lambda frame: update_locals(frame, 'out_conds', output, list_app=True))
+    return output
+
+def get_parent_variable(vname, vtype, fn):
+    frame = inspect.currentframe().f_back  # Get the current frame's parent
+    while frame:
+        if vname in frame.f_locals:
+            val = frame.f_locals[vname]
+            if isinstance(val, vtype):
+                if fn is not None:
+                    fn(frame)
+                return frame.f_locals[vname]
+        frame = frame.f_back
+    return None
+
+def cd_cfg_function(kwargs):
+    model_options = kwargs['model_options']
+    if "sampler_cfg_function2" in model_options:
+        return model_options['sampler_cfg_function2'](kwargs)
+    x = kwargs['input']
+    cond_pred = kwargs['cond_denoised']
+    uncond_pred = kwargs['uncond_denoised']
+    cond_scale = kwargs['cond_scale']
+    cfg_result = model_options['cfg_result']
+    cfg_result += (cond_pred - uncond_pred) * cond_scale
+    return x - cfg_result
+
+class CFGDenoiser:
+    def __init__(self, orig_fn) -> None:
+        self.orig_fn = orig_fn
+
+    def sampling_function(self, model, x, timestep, uncond, cond, cond_scale, model_options, *args0, **kwargs0):
+        if math.isclose(cond_scale, 1.0) and model_options.get("disable_cfg1_optimization", False) == False:
+            uncond_ = None
+        else:
+            uncond_ = uncond
+
+        conds = [cond, uncond_]
+
+        if uncond_ is None:
+            return self.orig_fn(model, x, timestep, uncond, cond, cond_scale, model_options, *args0, **kwargs0)
+
+        id = getrandbits(7)
+        if 'model_function_wrapper' in model_options:
+            model_options[f'model_function_wrapper_{id}'] = model_options.pop('model_function_wrapper')
+        model_options['model_function_wrapper'] = partial(model_function_wrapper_cd, model_options=model_options, id=id)
+        out = comfy.samplers.calc_cond_batch(model, conds, x, timestep, model_options)
+        model_options.pop('model_function_wrapper', None)
+        if f'model_function_wrapper_{id}' in model_options:
+            model_options['model_function_wrapper'] = model_options.pop(f'model_function_wrapper_{id}')
+        
+        outputs = out.outputs
+
+        out_conds = out.out_conds
+        out_counts= out.out_counts
+        if len(out_conds) < len(out_counts):
+            for _ in out_counts:
+                out_conds.append(torch.zeros_like(outputs[0].output_chunks[0]))
+
+        oconds=[]
+        for _output in outputs:
+            cond_or_uncond=_output.cond_or_uncond
+            batch_chunks=_output.batch_chunks
+            output=_output.output_chunks
+            area=_output.area
+            mult=_output.mult
+            for o in range(batch_chunks):
+                cond_index = cond_or_uncond[o]
+                a = area[o]
+                if a is None:
+                    if cond_index == 0:
+                        oconds.append(output[o] * mult[o])
+                    else:
+                        out_conds[cond_index] += output[o] * mult[o]
+                        out_counts[cond_index] += mult[o]
+                else:
+                    out_c = out_conds[cond_index] if cond_index != 0 else torch.zeros_like(out_conds[cond_index])
+                    out_cts = out_counts[cond_index]
+                    dims = len(a) // 2
+                    for i in range(dims):
+                        out_c = out_c.narrow(i + 2, a[i + dims], a[i])
+                        out_cts = out_cts.narrow(i + 2, a[i + dims], a[i])
+                    out_c += output[o] * mult[o]
+                    out_cts += mult[o]
+                    if cond_index == 0:
+                        oconds.append(out_c)
+
+        for i in range(len(out_conds)):
+            if i != 0: 
+                out_conds[i] /= out_counts[i]
+
+        del out
+        out = out_conds
+
+        for fn in model_options.get("sampler_pre_cfg_function", []):
+            out[0] = torch.cat(oconds).to(oconds[0])
+            args = {"conds":conds, "conds_out": out, "cond_scale": cond_scale, "timestep": timestep,
+                    "input": x, "sigma": timestep, "model": model, "model_options": model_options}
+            out  = fn(args)
+
+        # ComfyUI: last prompt -> first
+        # conds were reversed in calc_cond_batch, so do the same for weights
+        weights = [x.get('weight', None) for x in cond]
+        weights.reverse()
+        out_uncond = out[1]
+        cfg_result = out_uncond.clone()
+        cond_scale = cond_scale / max(len(oconds), 1)
+
+        model_options=model_options.copy()
+        if "sampler_cfg_function" in model_options:
+            model_options['sampler_cfg_function2'] = model_options.pop('sampler_cfg_function')
+        model_options['sampler_cfg_function'] = cd_cfg_function
+        model_options['cfg_result'] = cfg_result
+
+        # ComfyUI: computes the average -> do cfg
+        # A1111: (cond - uncond) / total_len_of_conds -> in-place addition for each cond -> results in cfg
+        for ix, ocond in enumerate(oconds):
+            weight = (weights[ix:ix+1] or [1.0])[0] or 1.0
+            # cfg_result += (ocond - out_uncond) * (weight * cond_scale) # all this code just to do this
+            if "sampler_cfg_function2" in model_options:
+                # case when there's another cfg_fn. subtract out_uncond and in-place add the result. feed result back in.
+                cfg_result += comfy.samplers.cfg_function(model, ocond, out_uncond, weight * cond_scale, x, timestep, model_options=model_options, cond=cond, uncond=uncond_) - out_uncond
+            else: # calls cd_cfg_function and does an in-place addition
+                if model_options.get("sampler_post_cfg_function", []):
+                    # feed the result back in.
+                    cfg_result = comfy.samplers.cfg_function(model, ocond, out_uncond, weight * cond_scale, x, timestep, model_options=model_options, cond=cond, uncond=uncond_)
+                else:
+                    # default case. discards the output.
+                    comfy.samplers.cfg_function(model, ocond, out_uncond, weight * cond_scale, x, timestep, model_options=model_options, cond=cond, uncond=uncond_)
+            model_options['cfg_result'] = cfg_result
+        return cfg_result
 
 def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     '''

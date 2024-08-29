@@ -6,7 +6,6 @@ import comfy.model_patcher
 import comfy.sd
 import comfy.model_management
 import comfy.samplers
-from .modules.shared import logger
 from .smZNodes import HijackClip, HijackClipComfy, get_learned_conditioning
 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXL
 
@@ -213,23 +212,21 @@ class smZ_Settings:
         kwargs['eta_noise_seed_delta'] = kwargs.pop('ENSD')
         kwargs['s_tmax'] = kwargs['s_tmax'] or float('inf')
 
-        from .modules.shared import Options, opts_default, opts as opts_global
+        from .modules.shared import Options, logger, opts_default, opts as opts_global
 
         opts_global.update(opts_default)
         opts = opts_default.clone()
         kwargs_new = {k: v for k, v in kwargs.items() if not ('info' in k or 'heading' in k or 'ㅤ' in k)}
         opts.update(kwargs_new)
+        opts_global.debug = opts.debug
 
-        first = first.clone()
         opts_key = Options.KEY
         if isinstance(first, comfy.model_patcher.ModelPatcher):
-            first.model_options.pop(opts_key, None)
+            first = first.clone()
             first.model_options[opts_key] = opts
-            opts_global.debug = opts.debug
         elif isinstance(first, comfy.sd.CLIP):
-            first.patcher.model_options.pop(opts_key, None)
+            first = first.clone()
             first.patcher.model_options[opts_key] = opts
-            opts_global.debug = opts.debug
         logger.setLevel(logging.DEBUG if opts_global.debug else logging.INFO)
         return (first,)
 

@@ -16,12 +16,9 @@ level=logging.INFO
 logger.propagate = False
 logger.setLevel(level)
 stdoutHandler = logging.StreamHandler()
-stdoutHandler.setLevel(level)
 fmt = logging.Formatter("[%(name)s] | %(filename)s:%(lineno)s | %(message)s")
 stdoutHandler.setFormatter(fmt)
-stdoutHandler.addFilter(lambda record: record.levelname == logging.getLevelName(level))
 logger.addHandler(stdoutHandler)
-logger.d=lambda *args: logger.debug(' '.join(map(str, args)))
 def join_args(*args):
     return ' '.join(map(str, args))
 

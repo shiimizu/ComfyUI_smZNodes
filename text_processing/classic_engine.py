@@ -132,6 +132,7 @@ class ClassicTextProcessingEngine:
         return tokenized
     
     def tokenize_with_weights(self, texts, return_word_ids=False):
+        texts = [parse_and_register_embeddings(self, text) for text in texts]
         if self.opts.use_old_emphasis_implementation:
             return self.process_texts_past(texts)
         batch_chunks, token_count = self.process_texts(texts)
@@ -181,7 +182,6 @@ class ClassicTextProcessingEngine:
         return z
 
     def tokenize_line(self, line):
-        line = parse_and_register_embeddings(self, line)
         parsed = prompt_parser.parse_prompt_attention(line)
 
         tokenized = self.tokenize([text for text, _ in parsed])

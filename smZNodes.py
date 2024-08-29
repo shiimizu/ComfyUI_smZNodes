@@ -18,7 +18,7 @@ from comfy.sd1_clip import unescape_important, escape_important, token_weights
 from .modules import prompt_parser
 from .modules.shared import SimpleNamespaceFast, Options, logger, join_args
 from .modules.sd_hijack_clip_old import process_texts_past
-from .text_processing.textual_inversion import get_valid_embeddings, emb_re_
+from .text_processing.textual_inversion import EmbbeddingRegex
 from .text_processing.classic_engine import ClassicTextProcessingEngine
 from .text_processing.t5_engine import T5TextProcessingEngine
 
@@ -186,7 +186,7 @@ def HijackClip(clip, opts):
         for obj, attr in ls:
             for clip_name, v in iter_items(getattr(clip, obj).__dict__):
                 if hasattr(v, attr):
-                    logger.debug(join_args(attr, obj, clip_name, type(v), getattr(v, attr).__qualname__))
+                    logger.debug(join_args(attr, obj, clip_name, type(v).__qualname__, getattr(v, attr).__qualname__))
                     if clip_name not in store_orig:
                         store_orig[clip_name] = {}
                     store_orig[clip_name][obj] = v
@@ -230,7 +230,7 @@ def HijackClipComfy(clip):
         for obj, attr in ls:
             for clip_name, v in iter_items(getattr(clip, obj).__dict__):
                 if hasattr(v, attr):
-                    logger.debug(join_args(attr, obj, clip_name, type(v), getattr(v, attr).__qualname__))
+                    logger.debug(join_args(attr, obj, clip_name, type(v).__qualname__, getattr(v, attr).__qualname__))
                     if clip_name not in store_orig:
                         store_orig[clip_name] = {}
                     store_orig[clip_name][obj] = v
@@ -470,11 +470,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
 
     text = escape_important(text)
     parsed_weights = token_weights(text, 1.0)
-
-    embs = get_valid_embeddings(self.embedding_directory) if self.embedding_directory is not None else []
-    embs_str = embs_str + '|' if (embs_str:='|'.join(embs)) else ''
-    emb_re = emb_re_.format(embs_str)
-    emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
+    embr = EmbbeddingRegex(self.embedding_directory)
 
     #tokenize words
     tokens = []
@@ -482,7 +478,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
         to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
         to_tokenize = [x for x in to_tokenize if x != ""]
         for word in to_tokenize:
-            matches = emb_re.finditer(word)
+            matches = embr.pattern.finditer(word)
             last_end = 0
             leftovers=[]
             for _, match in enumerate(matches, start=1):
@@ -493,7 +489,6 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                 ext = (match.group(4) or (match.group(3) or ''))
                 embedding_sname = (match.group(2) or '').removesuffix(ext)
                 embedding_name = embedding_sname + ext
-                embedding_name = embedding_name.replace('\\', '/') if '\\' in embedding_name else embedding_name
                 if embedding_name:
                     embed, leftover = self._try_get_embedding(embedding_name)
                     if embed is None:

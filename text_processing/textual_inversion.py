@@ -175,15 +175,17 @@ class EmbeddingDatabase:
         else:
             return
 
+        emb_out = None
         if data is not None:
             embedding = create_embedding_from_data(data, name, filename=filename, filepath=path)
 
-            if self.expected_shape == -1 or self.expected_shape == embedding.shape:
-                self.register_embedding(embedding)
-            else:
-                self.skipped_embeddings[name] = embedding
+            # if self.expected_shape == -1 or self.expected_shape == embedding.shape:
+            emb_out = self.register_embedding(embedding)
+            # else:
+            #    emb_out = self.skipped_embeddings[name] = embedding
         else:
             print(f"Unable to load Textual inversion embedding due to data issue: '{name}'.")
+        return emb_out
 
     def load_from_dir(self, embdir):
         if not os.path.isdir(embdir.path):
@@ -261,8 +263,40 @@ def create_embedding_from_data(data, name, filename='unknown embedding file', fi
 
     return embedding
 
+from comfy.sd1_clip import expand_directory_list
+def get_embed_file_path(embedding_name, embedding_directory):
+    if isinstance(embedding_directory, str):
+        embedding_directory = [embedding_directory]
+
+    embedding_directory = expand_directory_list(embedding_directory)
+
+    valid_file = None
+    for embed_dir in embedding_directory:
+        embed_path = os.path.abspath(os.path.join(embed_dir, embedding_name))
+        embed_dir = os.path.abspath(embed_dir)
+        try:
+            if os.path.commonpath((embed_dir, embed_path)) != embed_dir:
+                continue
+        except Exception:
+            continue
+        if not os.path.isfile(embed_path):
+            extensions = ['.safetensors', '.pt', '.bin']
+            for x in extensions:
+                t = embed_path + x
+                if os.path.isfile(t):
+                    valid_file = t
+                    break
+        else:
+            valid_file = embed_path
+        if valid_file is not None:
+            break
+
+    if valid_file is None:
+        return None
+
+    return valid_file
+
 import re
-from comfy.sd1_clip import unescape_important, escape_important
 from ..modules.shared import logger
 emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?:(:)(\d+\.?\d*|\d*\.\d+))?"
 def get_valid_embeddings(embedding_directories):
@@ -270,62 +304,69 @@ def get_valid_embeddings(embedding_directories):
     exts = ['.safetensors', '.pt', '.bin']
     if isinstance(embedding_directories, str):
         embedding_directories = [embedding_directories]
+    embedding_directories = expand_directory_list(embedding_directories)
     embs = set()
+    from collections import OrderedDict, namedtuple
+    EmbedInfo = namedtuple('EmbedInfo', ['basename', 'filename', 'filepath'])
+    store = OrderedDict()
     for embd in embedding_directories:
         for root, dirs, files in os.walk(embd, followlinks=True, topdown=False):
             for name in files:
                 if not b_any(x in os.path.splitext(name)[1] for x in exts): continue
-                n = os.path.basename(name)
-                for ext in exts: n=n.removesuffix(ext)
-                n = os.path.normpath(os.path.join(os.path.relpath(root, embd), n))
-                embs.add(re.escape(n))
+                basename = os.path.basename(name)
+                for ext in exts: basename=basename.removesuffix(ext)
+                relpath_basename = os.path.normpath(os.path.join(os.path.relpath(root, embd), basename))
+                k = os.path.normpath(os.path.join(os.path.relpath(root, embd), name))
+                store[k] = EmbedInfo(basename, name, os.path.join(root, name))
                 # add its counterpart
-                if '/' in n:
-                    embs.add(re.escape(n.replace('/', '\\')))
-                elif '\\' in n: 
-                    embs.add(re.escape(n.replace('\\', '/')))
-    embs = sorted(embs, key=len, reverse=True)
+                if '/' in k:
+                    store[k.replace('/', '\\')] = EmbedInfo(basename, name, os.path.join(root, name))
+                elif '\\' in relpath_basename: 
+                    store[k.replace('\\', '/')] = EmbedInfo(basename, name, os.path.join(root, name))
+                
+    embs = OrderedDict(sorted(store.items(), key=lambda item: len(item[0]), reverse=True))
     return embs
 
+class EmbbeddingRegex:
+    STR_PATTERN = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?:(:)(\d+\.?\d*|\d*\.\d+))?"
+    def __init__(self, embedding_directory) -> None:
+        self.embedding_directory = embedding_directory
+        self.embeddings = get_valid_embeddings(self.embedding_directory)  if self.embedding_directory is not None else {}
+        joined_keys = '|'.join([re.escape(os.path.splitext(k)[0]) for k in self.embeddings.keys()])
+        emb_re = self.STR_PATTERN.format(joined_keys + '|' if joined_keys else '')
+        self.pattern = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
+
 def parse_and_register_embeddings(self, text: str):
-    text_ = escape_important(text)
-    embs = get_valid_embeddings(self.embedding_directory)
-    embs_str = escape_important('|'.join(embs))
-    emb_re = emb_re_.format(embs_str + '|' if embs_str else '')
-    emb_re = re.compile(emb_re, flags=re.MULTILINE | re.UNICODE | re.IGNORECASE)
-    matches = emb_re.finditer(text_)
-    if not getattr(self.embeddings, 'embeddings', None):
-        self.embeddings.embeddings = {}
-    embeddings = self.embeddings.embeddings
+    embr = EmbbeddingRegex(self.embedding_directory)
+    embs = embr.embeddings
+    matches = embr.pattern.finditer(text)
+    exts = ['.pt', '.safetensors', '.bin']
+
     for matchNum, match in enumerate(matches, start=1):
         found=False
         ext = (match.group(4) or (match.group(3) or ''))
         embedding_sname = (match.group(2) or '').removesuffix(ext)
-        if '\\' in embedding_sname:
-            embedding_sname_new = embedding_sname.replace('\\', '/')
-            text_ = text_.replace(embedding_sname, embedding_sname_new)
-            embedding_sname = embedding_sname_new
-        embedding_name = unescape_important(embedding_sname) + ext
+        embedding_name = embedding_sname + ext
         if embedding_name:
-            embed, _ = self._try_get_embedding(embedding_name)
+            embed = None
+            if ext:
+                embed_info = embs.get(embedding_name + ext, None)
+            else:
+                for _ext in exts:
+                    embed_info = embs.get(embedding_name + _ext, None)
+                    if embed_info is not None: break
+            if embed_info is not None:
+                found=True
+                try:
+                    embed = self.embeddings.load_from_file(embed_info.filepath, embed_info.filename)
+                except Exception as e:
+                    logging.warning(f'\033[33mWarning\033[0m loading embedding `{embedding_name + ext}`: {e}')
             if embed is not None:
                 found=True
                 logger.debug(f'using embedding:{embedding_name}')
-                # if embed.device != devices.device:
-                #     embed = embed.to(device=devices.device)
-                if embedding_sname not in embeddings:
-                    embeddings[embedding_sname] = {}
-                embeddings[embedding_sname][self.embedding_key] = embed
         if not found:
-            logging.warning(f"warning, embedding:{embedding_name} does not exist, ignoring")
-    # comfyui trims non-existent embedding_names while a1111 doesn't.
-    # here we get group 2,5,6. group 2 minus its file extension.
-    out = emb_re.sub(lambda m: (m.group(2) or '').removesuffix(m.group(4) or (m.group(3) or '')) + (m.group(5) or '') + (m.group(6) or ''), text_)
-    for name, data in embeddings.items():
-        emb = Embedding(data, name)
-        shape = sum([v.shape[-1] for v in data.values()])
-        vectors = max([v.shape[0] for v in data.values()])
-        emb.shape = shape
-        emb.vectors = vectors
-        self.embeddings.register_embedding(emb)
+            logging.warning(f"\033[33mwarning\033[0m, embedding:{embedding_name} does not exist, ignoring")
+    # ComfyUI trims non-existent embedding_names while A1111 doesn't.
+    # here we get group 2,5,6. (group 2 minus its file extension)
+    out = embr.pattern.sub(lambda m: (m.group(2) or '').removesuffix(m.group(4) or (m.group(3) or '')) + (m.group(5) or '') + (m.group(6) or ''), text)
     return out

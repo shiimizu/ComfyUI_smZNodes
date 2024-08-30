@@ -123,13 +123,14 @@ def sample(*args, **kwargs):
     if Options.KEY in model_options:
         if hasattr(sampler, 'sampler_function'):
             opts = model_options[Options.KEY]
-            store.sampler_function = sampler.sampler_function
-            sampler_function_sig_params = inspect.signature(sampler.sampler_function).parameters
+            if not hasattr(sampler, f'_sampler_function'):
+                sampler._sampler_function = sampler.sampler_function
+            sampler_function_sig_params = inspect.signature(sampler._sampler_function).parameters
             params = {x: getattr(opts, x)  for x in ['eta', 's_churn', 's_tmin', 's_tmax', 's_noise'] if x in sampler_function_sig_params}
-            sampler.sampler_function = lambda *a, **kw: store.sampler_function(*a, **{**kw, **params})
+            sampler.sampler_function = lambda *a, **kw: sampler._sampler_function(*a, **{**kw, **params})
     else:
-        if hasattr(sampler, 'sampler_function') and hasattr(store, 'sampler_function'):
-            sampler.sampler_function = store.sampler_function
+        if hasattr(sampler, '_sampler_function'):
+            sampler.sampler_function = sampler._sampler_function
     return orig_fn(*args, **kwargs)
 
 def max_denoise(*args, **kwargs):

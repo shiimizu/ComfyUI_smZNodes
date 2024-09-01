@@ -1,8 +1,7 @@
 import torch
 from collections import namedtuple
-from . import parsing, emphasis
+from . import prompt_parser, emphasis
 from comfy import model_management
-from ..modules import prompt_parser
 
 
 PromptChunkFix = namedtuple('PromptChunkFix', ['offset', 'embedding'])

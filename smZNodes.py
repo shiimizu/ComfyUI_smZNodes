@@ -15,12 +15,12 @@ import comfy.sample
 import comfy.utils
 import comfy.samplers
 from comfy.sd1_clip import unescape_important, escape_important, token_weights
-from .modules import prompt_parser
 from .modules.shared import SimpleNamespaceFast, Options, logger, join_args
-from .modules.sd_hijack_clip_old import process_texts_past
-from .text_processing.textual_inversion import EmbbeddingRegex
-from .text_processing.classic_engine import ClassicTextProcessingEngine
-from .text_processing.t5_engine import T5TextProcessingEngine
+from .modules.text_processing import prompt_parser
+from .modules.text_processing.past_classic_engine import process_texts_past
+from .modules.text_processing.textual_inversion import EmbbeddingRegex
+from .modules.text_processing.classic_engine import ClassicTextProcessingEngine
+from .modules.text_processing.t5_engine import T5TextProcessingEngine
 
 class Store(SimpleNamespaceFast): ...
 
@@ -293,14 +293,14 @@ class CustomList(list):
         return self
 
 def modify_locals_values(frame, fn):
-        try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
-        except Exception: ...
-        fn(frame)
-        try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
-        except Exception: ...
+    # https://stackoverflow.com/a/34671307
+    try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+    except Exception: ...
+    fn(frame)
+    try: ctypes.pythonapi.PyFrame_LocalsToFast(ctypes.py_object(frame), ctypes.c_int(1))
+    except Exception: ...
 
 def update_locals(frame,k,v,list_app=False):
-    # https://stackoverflow.com/a/34671307
     if not list_app:
         modify_locals_values(frame, lambda _frame: _frame.f_locals.__setitem__(k, v))
     else:
@@ -315,7 +315,7 @@ def update_locals(frame,k,v,list_app=False):
         frame.f_locals[k].out_counts = frame.f_locals['out_counts']
         modify_locals_values(frame, lambda _frame: _frame.f_locals.__setitem__('batch_chunks', 0))
 
-def model_function_wrapper_cd(model, args, model_options, id):
+def model_function_wrapper_cd(model, args, id, model_options={}):
     input_x = args['input']
     timestep_ = args['timestep']
     c = args['c']
@@ -344,10 +344,10 @@ def get_parent_variable(vname, vtype, fn):
         frame = frame.f_back
     return None
 
-def cd_cfg_function(kwargs):
+def cd_cfg_function(kwargs, id):
     model_options = kwargs['model_options']
-    if "sampler_cfg_function2" in model_options:
-        return model_options['sampler_cfg_function2'](kwargs)
+    if f"sampler_cfg_function_{id}" in model_options:
+        return model_options[f'sampler_cfg_function_{id}'](kwargs)
     x = kwargs['input']
     cond_pred = kwargs['cond_denoised']
     uncond_pred = kwargs['uncond_denoised']
@@ -374,7 +374,7 @@ class CFGDenoiser:
         id = getrandbits(7)
         if 'model_function_wrapper' in model_options:
             model_options[f'model_function_wrapper_{id}'] = model_options.pop('model_function_wrapper')
-        model_options['model_function_wrapper'] = partial(model_function_wrapper_cd, model_options=model_options, id=id)
+        model_options['model_function_wrapper'] = partial(model_function_wrapper_cd, id=id, model_options=model_options)
         out = comfy.samplers.calc_cond_batch(model, conds, x, timestep, model_options)
         model_options.pop('model_function_wrapper', None)
         if f'model_function_wrapper_{id}' in model_options:
@@ -436,11 +436,10 @@ class CFGDenoiser:
         out_uncond = out[1]
         cfg_result = out_uncond.clone()
         cond_scale = cond_scale / max(len(oconds), 1)
-
-        model_options=model_options.copy()
+        
         if "sampler_cfg_function" in model_options:
-            model_options['sampler_cfg_function2'] = model_options.pop('sampler_cfg_function')
-        model_options['sampler_cfg_function'] = cd_cfg_function
+            model_options[f'sampler_cfg_function_{id}'] = model_options.pop('sampler_cfg_function')
+        model_options['sampler_cfg_function'] = partial(cd_cfg_function, id=id)
         model_options['cfg_result'] = cfg_result
 
         # ComfyUI: computes the average -> do cfg
@@ -448,7 +447,7 @@ class CFGDenoiser:
         for ix, ocond in enumerate(oconds):
             weight = (weights[ix:ix+1] or [1.0])[0] or 1.0
             # cfg_result += (ocond - out_uncond) * (weight * cond_scale) # all this code just to do this
-            if "sampler_cfg_function2" in model_options:
+            if f"sampler_cfg_function_{id}" in model_options:
                 # case when there's another cfg_fn. subtract out_uncond and in-place add the result. feed result back in.
                 cfg_result += comfy.samplers.cfg_function(model, ocond, out_uncond, weight * cond_scale, x, timestep, model_options=model_options, cond=cond, uncond=uncond_) - out_uncond
             else: # calls cd_cfg_function and does an in-place addition

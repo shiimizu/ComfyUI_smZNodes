@@ -1,15 +1,17 @@
 from __future__ import annotations
-
 import re
-from collections import namedtuple
 import lark
 from typing import List
-import torch
 from compel import Compel
-if __name__ == "__main__":
-    from shared import opts, logger
+from collections import namedtuple
+if __name__ != "__main__":
+    import torch
+    from ..shared import opts, logger
 else:
-    from .shared import opts, logger
+    class Opts: ...
+    opts = Opts()
+    opts.prompt_attention = 'A1111 parser'
+    import logging as logger
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][: in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -523,7 +525,12 @@ def parse_prompt_attention(text):
 if __name__ == "__main__":
     import doctest
     doctest.testmod(optionflags=doctest.NORMALIZE_WHITESPACE)
-    input_text = '[black] [[grey]] (white) ((gray)) ((orange:1.1) yellow) ((purple) and [dark] red:1.1) [mouse:0.2] [(cat:1.1):0.5]'
+    import sys
+    args = sys.argv[1:]
+    if len(args) > 0:
+        input_text = " ".join(args)
+    else:
+        input_text = '[black] [[grey]] (white) ((gray)) ((orange:1.1) yellow) ((purple) and [dark] red:1.1) [mouse:0.2] [(cat:1.1):0.5]'
     print(f'Prompt: {input_text}')
     all_schedules = get_learned_conditioning_prompt_schedules([input_text], 100)[0]
     print('Schedules', all_schedules)

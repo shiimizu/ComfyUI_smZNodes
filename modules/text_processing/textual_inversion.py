@@ -6,7 +6,6 @@ import zlib
 import logging
 import numpy as np
 import safetensors.torch
-
 from PIL import Image
 
 
@@ -297,7 +296,7 @@ def get_embed_file_path(embedding_name, embedding_directory):
     return valid_file
 
 import re
-from ..modules.shared import logger
+from ..shared import logger
 emb_re_ = r"(embedding:)?(?:({}[\w\.\-\!\$\/\\]+(\.safetensors|\.pt|\.bin)|(?(1)[\w\.\-\!\$\/\\]+|(?!)))(\.safetensors|\.pt|\.bin)?)(?:(:)(\d+\.?\d*|\d*\.\d+))?"
 def get_valid_embeddings(embedding_directories):
     from  builtins import any as b_any

@@ -123,7 +123,7 @@ class smZ_Settings:
     @classmethod
     def INPUT_TYPES(s):
         from .modules.shared import opts_default as opts
-        from .text_processing.emphasis import get_options_descriptions_nl
+        from .modules.text_processing.emphasis import get_options_descriptions_nl
         i = 0
         def create_heading():
             nonlocal i

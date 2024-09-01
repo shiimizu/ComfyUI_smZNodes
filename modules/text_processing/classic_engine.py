@@ -1,12 +1,10 @@
 import math
 import torch
 import logging
-
 from collections import namedtuple
-from . import emphasis #, parsing
-from .textual_inversion import EmbeddingDatabase, parse_and_register_embeddings
 from comfy import model_management
-from ..modules import prompt_parser
+from . import emphasis, prompt_parser
+from .textual_inversion import EmbeddingDatabase, parse_and_register_embeddings
 
 
 PromptChunkFix = namedtuple('PromptChunkFix', ['offset', 'embedding'])

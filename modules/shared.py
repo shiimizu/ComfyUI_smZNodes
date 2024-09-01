@@ -1,6 +1,21 @@
 import logging
-import sys
 from copy import deepcopy
+from comfy.model_management import vram_state, VRAMState
+from comfy.cli_args import args
+from comfy import model_management
+
+xformers_available = model_management.XFORMERS_IS_AVAILABLE
+logger = logging.getLogger("smZNodes")
+level = logging.INFO
+logger.propagate = False
+logger.setLevel(level)
+stdoutHandler = logging.StreamHandler()
+fmt = logging.Formatter("[%(name)s] | %(filename)s:%(lineno)s | %(message)s")
+stdoutHandler.setFormatter(fmt)
+logger.addHandler(stdoutHandler)
+
+def join_args(*args):
+    return ' '.join(map(str, args))
 
 class SimpleNamespaceFast:
     def __repr__(self):
@@ -10,34 +25,6 @@ class SimpleNamespaceFast:
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
-
-logger = logging.getLogger("smZNodes")
-level=logging.INFO
-logger.propagate = False
-logger.setLevel(level)
-stdoutHandler = logging.StreamHandler()
-fmt = logging.Formatter("[%(name)s] | %(filename)s:%(lineno)s | %(message)s")
-stdoutHandler.setFormatter(fmt)
-logger.addHandler(stdoutHandler)
-def join_args(*args):
-    return ' '.join(map(str, args))
-
-if __name__ != "shared":
-    from comfy.model_management import vram_state, VRAMState
-    from comfy.cli_args import args
-    from comfy import model_management
-    from . import devices
-    xformers_available = model_management.XFORMERS_IS_AVAILABLE
-    device = devices.device
-else:
-    vram_state = args = object()
-    VRAMState = SimpleNamespaceFast()
-    setattr(VRAMState, 'LOW_VRAM', 0)
-    setattr(VRAMState, 'NORMAL_VRAM', 1)
-    xformers_available=True
-
-options_templates = {}
-loaded_hypernetworks = []
 
 class Options(SimpleNamespaceFast):
     KEY = 'smZ_opts'
@@ -110,8 +97,6 @@ cmd_opts.xformers = xformers_available
 cmd_opts.force_enable_xformers = xformers_available
 
 opts.cross_attention_optimization = "None"
-# opts.cross_attention_optimization = "opt_sdp_no_mem_attention"
-# opts.cross_attention_optimization = "opt_sub_quad_attention"
 cmd_opts.sub_quad_q_chunk_size = 512
 cmd_opts.sub_quad_kv_chunk_size = 512
 cmd_opts.sub_quad_chunk_threshold = 80

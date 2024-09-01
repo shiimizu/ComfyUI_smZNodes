@@ -45,7 +45,7 @@ def setup_web_extension():
     if not hasattr(nodes, "EXTENSION_WEB_DIRS"):
         if not os.path.exists(web_extension_path):
             os.makedirs(web_extension_path)
-        js_src_path = os.path.join(cwd_path, "web/js", "smZdynamicWidgets.js")
+        js_src_path = os.path.join(cwd_path, "web", "smZdynamicWidgets.js")
         shutil.copy(js_src_path, web_extension_path)
 
 setup_web_extension()

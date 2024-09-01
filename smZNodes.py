@@ -157,9 +157,9 @@ def sampling_function(*args, **kwargs):
             total_steps = getattr(opts, 'total_steps', len(sigmas))
 
             if opts.skip_early_cond > 0 and step / total_steps <= opts.skip_early_cond:
-                cond_scale = True
+                cond_scale = 1.0
             elif (step % 2 or opts.s_min_uncond_all) and opts.s_min_uncond > 0 and sigma[0] < opts.s_min_uncond:
-                cond_scale = True
+                cond_scale = 1.0
 
             if cond_scale != _cond_scale:
                 if 'cond_scale' not in kwargs:

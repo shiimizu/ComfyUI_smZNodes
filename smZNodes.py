@@ -579,7 +579,7 @@ def prompt_handler(json_data):
                     s = 1
                     try: s = min(max(1, int(steps_input_value)), 10000)
                     except Exception as e:
-                        logging.warning("\033[33mWarning:\033[0m [smZNodes] Getting steps:", e)
+                        logging.warning(f"\033[33mWarning:\033[0m [smZNodes] Skipping prompt editing. Try recreating the node. {e}")
                     return s
                 else:
                     return steps_input_value

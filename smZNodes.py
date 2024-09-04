@@ -29,10 +29,9 @@ store = Store()
 def register_hooks():
     from .modules.rng import prepare_noise
     patches = [
-        (comfy.samplers, 'calc_cond_batch', calc_cond_batch),
         (comfy.samplers, 'get_area_and_mult', get_area_and_mult),
-        (comfy.samplers.KSamplerX0Inpaint, '__call__', KSamplerX0Inpaint___call__),
         (comfy.samplers.KSampler, 'sample', KSampler_sample),
+        (comfy.samplers.KSAMPLER, 'sample', KSAMPLER_sample),
         (comfy.samplers, 'sample', sample),
         (comfy.samplers.Sampler, 'max_denoise', max_denoise),
         (comfy.samplers, 'sampling_function', sampling_function),
@@ -52,75 +51,55 @@ def iter_items(d):
 
 def find_nearest(a,b):
     # Calculate the absolute differences. 
-    # the unsqueeze here broadcasts a to each row in b
-    diff = torch.abs(a.unsqueeze(1) - b)
+    diff = (a - b).abs()
 
     # Find the indices of the nearest elements
-    nearest_indices = torch.argmin(diff, dim=1)
+    nearest_indices = diff.argmin()
 
     # Get the nearest elements from b
-    nearest_elements = b[nearest_indices]
-    return nearest_elements.to(a)
-
-def get_value_from_args(fn, args, kwargs, key_to_lookup, idx=None):
-    value = None
-    if key_to_lookup in kwargs:
-        value = kwargs[key_to_lookup]
-    else:
-        try:
-            # Get its position in the formal parameters list and retrieve from args
-            arg_names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
-            index = arg_names.index(key_to_lookup)
-            value = args[index] if index < len(args) else None
-        except Exception:
-            if idx is not None and idx < len(args):
-                value = args[idx]
-    return value
-
-def calc_cond_batch(*args, **kwargs):
-    x_in = args[2]
-    model_options = args[4]
-    if not hasattr(x_in, 'model_options'):
-        x_in.model_options = model_options
-    return store.calc_cond_batch(*args, **kwargs)
+    return b[nearest_indices]
 
 def get_area_and_mult(*args, **kwargs):
-    x_in = args[1]
-    if (model_options:=getattr(x_in, 'model_options', None)) is not None and 'sigmas' in model_options:
-        conds = args[0]
-        if 'start_step' in conds and 'end_step' in conds:
-            timestep_in = args[2]
-            sigmas = model_options['sigmas']
-            ts_in = find_nearest(timestep_in, sigmas)
-            step = ss[0].item() if (ss:=(sigmas == ts_in[0]).nonzero()).shape[0] != 0 else 0
-            cur_i = min(len(sigmas)-1, step + model_options.get('start_step', 0))
-            if not (cur_i >= conds['start_step'] and cur_i < conds['end_step']):
-                return None
+    conds = args[0]
+    if 'start_step' in conds and 'end_step' in conds:
+        timestep_in = args[2]
+        sigmas = store.sigmas
+        ts_in = find_nearest(timestep_in, sigmas)
+        cur_i = ss[0].item() if (ss:=(sigmas == ts_in).nonzero()).shape[0] != 0 else 0
+        if not (cur_i >= conds['start_step'] and cur_i < conds['end_step']):
+            return None
     return store.get_area_and_mult(*args, **kwargs)
 
-def KSamplerX0Inpaint___call__(*args, **kwargs):
-    self = args[0]
-    model_options = kwargs['model_options'] if 'model_options' in kwargs else args[4]
-    model_options['sigmas'] = self.sigmas
-    return store.KSamplerX0Inpaint___call__(*args, **kwargs)
+def KSAMPLER_sample(*args, **kwargs):
+    orig_fn = store.KSAMPLER_sample
+    extra_args = kwargs['extra_args'] if 'extra_args' in kwargs else args[3]
+    model_options = extra_args['model_options']
+    sigmas = kwargs['sigmas'] if 'sigmas' in kwargs else args[2]
+    sigmas_all = model_options.get('sigmas', None)
+    sigmas_ = sigmas_all if sigmas_all is not None else sigmas
+    store.sigmas = sigmas_
+    return orig_fn(*args, **kwargs)
 
 def KSampler_sample(*args, **kwargs):
     orig_fn = store.KSampler_sample
-    start_step = get_value_from_args(orig_fn, args, kwargs, 'start_step', 6)
-    self = get_value_from_args(orig_fn, args, kwargs, 'self')
-    if Options.KEY in self.model_options:
-        self.model_options[Options.KEY].total_steps = self.steps
-    if start_step is None:
-        self.model_options.pop('start_step', None)
-    else:
-        self.model_options['start_step'] = start_step
+    self = args[0]
+    sigmas_ = kwargs['sigmas'] if 'sigmas' in kwargs else args[11]
+    sigmas = getattr(self, 'sigmas', sigmas_)
+    model_patcher = getattr(self, 'model', None)
+    model_options = getattr(model_patcher, 'model_options', None)
+    if model_options is not None:
+        model_options = model_options.copy()
+        if sigmas is not None:
+            model_options['sigmas'] = sigmas
+        self.model.model_options = model_options
     return orig_fn(*args, **kwargs)
 
 def sample(*args, **kwargs):
     orig_fn = store.sample
-    sampler = get_value_from_args(orig_fn, args, kwargs, 'sampler', 6)
-    model_options = get_value_from_args(orig_fn, args, kwargs, 'model_options', 8)
-    if Options.KEY in model_options:
+    model_patcher = args[0]
+    model_options = getattr(model_patcher, 'model_options', None)
+    sampler = kwargs['sampler'] if 'sampler' in kwargs else args[6]
+    if model_options is not None and Options.KEY in model_options:
         if hasattr(sampler, 'sampler_function'):
             opts = model_options[Options.KEY]
             if not hasattr(sampler, f'_sampler_function'):
@@ -135,26 +114,25 @@ def sample(*args, **kwargs):
 
 def max_denoise(*args, **kwargs):
     orig_fn = store.max_denoise
-    model_wrap = get_value_from_args(orig_fn, args, kwargs, 'model_wrap', 1)
+    model_wrap = kwargs['model_wrap'] if 'model_wrap' in kwargs else args[1]
     base_model = getattr(model_wrap, 'inner_model', None)
     model_options = getattr(model_wrap, 'model_options', getattr(base_model, 'model_options', None))
     return orig_fn(*args, **kwargs) if getattr(model_options.get(Options.KEY, True), 'sgm_noise_multiplier', True) else False
 
 def sampling_function(*args, **kwargs):
     orig_fn = store.sampling_function
-    model_options = get_value_from_args(orig_fn, args, kwargs, 'model_options', 6)
+    model_options = kwargs['model_options'] if 'model_options' in kwargs else args[6]
     model_options=model_options.copy()
     kwargs['model_options'] = model_options
-    if Options.KEY in model_options and 'sigmas' in model_options:
+    if Options.KEY in model_options:
         opts = model_options[Options.KEY]
         if opts.s_min_uncond_all or opts.s_min_uncond > 0 or opts.skip_early_cond > 0:
-            cond_scale = _cond_scale = get_value_from_args(orig_fn, args, kwargs, 'cond_scale', 5)
-            sigmas = model_options['sigmas']
-            sigma = get_value_from_args(orig_fn, args, kwargs, 'timestep', 2)
+            cond_scale = _cond_scale = kwargs['cond_scale'] if 'cond_scale' in kwargs else args[5]
+            sigmas = store.sigmas # [store.sigmas != 0]
+            sigma = kwargs['timestep'] if 'timestep' in kwargs else args[2]
             ts_in = find_nearest(sigma, sigmas)
-            step = ss[0].item() if (ss:=(sigmas == ts_in[0]).nonzero()).shape[0] != 0 else 0
-            step = min(len(sigmas)-1, step + model_options.get('start_step', 0))
-            total_steps = getattr(opts, 'total_steps', len(sigmas))
+            step = ss[0].item() if (ss:=(sigmas == ts_in).nonzero()).shape[0] != 0 else 0
+            total_steps = sigmas.shape[0] - 1
 
             if opts.skip_early_cond > 0 and step / total_steps <= opts.skip_early_cond:
                 cond_scale = 1.0
@@ -166,7 +144,7 @@ def sampling_function(*args, **kwargs):
                     args = args[:5]
                 kwargs['cond_scale'] = cond_scale
 
-    cond = get_value_from_args(orig_fn, args, kwargs, 'cond', 4)
+    cond = kwargs['cond'] if 'cond' in kwargs else args[4]
     weights = [x.get('weight', None) for x in cond]
     has_some = any(item is not None for item in weights) and len(weights) > 1
     if has_some:

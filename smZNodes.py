@@ -576,7 +576,11 @@ def prompt_handler(json_data):
             # Base case: it's a direct value
             if not isinstance(steps_input_value, list) and validator(steps_input_value):
                 if val == 'steps':
-                    return min(max(1, int(steps_input_value)), 10000)
+                    s = 1
+                    try: s = min(max(1, int(steps_input_value)), 10000)
+                    except Exception as e:
+                        logging.warning("\033[33mWarning:\033[0m [smZNodes] Getting steps:", e)
+                    return s
                 else:
                     return steps_input_value
             # Loop case: it's a reference to another node

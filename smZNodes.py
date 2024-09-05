@@ -66,7 +66,8 @@ def get_area_and_mult(*args, **kwargs):
         sigmas = store.sigmas
         ts_in = find_nearest(timestep_in, sigmas)
         cur_i = ss[0].item() if (ss:=(sigmas == ts_in).nonzero()).shape[0] != 0 else 0
-        if not (cur_i >= conds['start_step'] and cur_i < conds['end_step']):
+        cur = cur_i / (sigmas.shape[0] - 1)
+        if not (cur >= conds['start_step'] and cur < conds['end_step']):
             return None
     return store.get_area_and_mult(*args, **kwargs)
 
@@ -92,7 +93,7 @@ def KSampler_sample(*args, **kwargs):
     model_options = getattr(model_patcher, 'model_options', None)
     if model_options is not None:
         sigmas = None
-        try: sigmas = kwargs['sigmas'] if 'sigmas' in kwargs else args[11]
+        try: sigmas = kwargs['sigmas'] if 'sigmas' in kwargs else args[10]
         except Exception: ...
         if sigmas is None:
             sigmas = getattr(self, 'sigmas', None)
@@ -234,13 +235,14 @@ def transform_schedules(schedules, weight=None, with_weight=False):
     end_steps = [schedule.end_at_step for schedule in schedules]
     start_end_pairs = list(zip([0] + end_steps[:-1], end_steps))
     with_steps = len(schedules) > 1
+    steps = len(schedules)
 
     def process(schedule, start_step, end_step):
-        nonlocal with_steps
+        nonlocal with_steps, steps
         d = schedule.cond.copy()
         d.pop('cond', None)
         if with_steps:
-            d |= {"start_step": start_step, "end_step": end_step}
+            d |= {"start_step": start_step / steps, "end_step": end_step / steps}
         if weight is not None and with_weight:
             d['weight'] = weight
         return d

@@ -3,14 +3,15 @@ import shutil
 import importlib
 import subprocess
 from pathlib import Path
+import types
 
 def init_modules() :
     from sys import modules
-    return set(modules.values())
+    return set([m for m in modules.values() if not isinstance(m, types.ModuleType)])
 
 def reload_modules(m) :
     from sys import modules
-    for module in set(modules.values()) - m :
+    for module in set([m for m in modules.values() if not isinstance(m, types.ModuleType)]) - m :
         try:
             importlib.reload(module)
         except Exception as e: ...

@@ -3,23 +3,27 @@ import shutil
 import importlib
 import subprocess
 from pathlib import Path
-import types
 
-def init_modules() :
+def get_modules():
     from sys import modules
-    return set([m for m in modules.values() if not isinstance(m, types.ModuleType)])
+    s = set()
+    for m in modules.values():
+        try: s.add(m)
+        except Exception: ...
+    return s
 
-def reload_modules(m) :
-    from sys import modules
-    for module in set([m for m in modules.values() if not isinstance(m, types.ModuleType)]) - m :
-        try:
-            importlib.reload(module)
-        except Exception as e: ...
+def reload_modules(m):
+    s = get_modules()
+    for module in s - m :
+        try: importlib.reload(module)
+        except Exception: ...
 
-PRELOADED_MODULES = init_modules()
+PRELOADED_MODULES = None
 
-def install(module):
+def install(module, PRELOADED_MODULES):
     if importlib.util.find_spec(module) is not None: return
+    if PRELOADED_MODULES is None:
+        PRELOADED_MODULES = get_modules()
     import sys
     try:
         print(f"\033[92m[smZNodes] \033[0;31m{module} is not installed. Attempting to install...\033[0m")
@@ -28,9 +32,10 @@ def install(module):
         print(f"\033[92m[smZNodes] {module} Installed!\033[0m")
     except Exception as e:
         print(f"\033[92m[smZNodes] \033[0;31mFailed to install {module}.\033[0m")
+    return PRELOADED_MODULES
 
 for pkg in ['compel', 'lark']:
-    install(pkg)
+    PRELOADED_MODULES = install(pkg, PRELOADED_MODULES)
 
 # ============================
 # web

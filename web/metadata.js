@@ -35,7 +35,7 @@ app.registerExtension({
         }
         const _exifPath = exifPath? exifPath.toLowerCase() : ""
         if (!exifPath || !_exifPath.includes('ComfyUI') || !_exifPath.includes('smz') || !_exifPath.includes('exif.js'))
-            exifPath = '/extensions/ComfyUI_smZNodes/js/exif.js'
+            exifPath = '/extensions/ComfyUI_smZNodes/exif.js'
         externalScript.src = exifPath;
         externalScript.onload = function(e) {
             _EXIF = EXIF

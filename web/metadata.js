@@ -1,6 +1,12 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { getPngMetadata } from "../../scripts/pnginfo.js";
+
+// Fix for Firefox?
+if (app) {}
+if (api) {}
+if (getPngMetadata) {}
+
 let _EXIF = null
 
 app.registerExtension({

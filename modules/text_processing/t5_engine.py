@@ -117,9 +117,19 @@ class T5TextProcessingEngine:
             if line not in cache:
                 chunks, token_count = self.tokenize_line(line)
                 line_tokens_and_weights = []
+
+                # Pad all chunks to the length of the longest chunk
+                max_tokens = 0
+                for chunk in chunks:
+                    max_tokens = max (len(chunk.tokens), max_tokens)
+
                 for chunk in chunks:
                     tokens = chunk.tokens
                     multipliers = chunk.multipliers
+                    remaining_count = max_tokens - len(tokens)
+                    if remaining_count > 0:
+                        tokens += [self.id_pad] * remaining_count
+                        multipliers += [1.0] * remaining_count
                     line_tokens_and_weights.append((tokens, multipliers))
                 cache[line] = line_tokens_and_weights
 

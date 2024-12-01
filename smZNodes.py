@@ -39,10 +39,9 @@ def register_hooks():
         (comfy.sample, 'prepare_noise', prepare_noise),
     ]
     for parent, fn_name, fn_patch in patches:
-        if not hasattr(parent, f"_{fn_name}"):
-            setattr(store, f"_{fn_name}", getattr(parent, fn_name))
-        setattr(store, fn_patch.__name__, getattr(parent, fn_name))
-        setattr(parent, fn_name, fn_patch)
+        if not hasattr(store, fn_patch.__name__):
+            setattr(store, fn_patch.__name__, getattr(parent, fn_name))
+            setattr(parent, fn_name, fn_patch)
 
 def iter_items(d):
     for key, value in d.items():

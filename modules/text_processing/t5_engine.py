@@ -142,7 +142,7 @@ class T5TextProcessingEngine:
         elif isinstance(token_weight_pairs[0], list):
             token_weight_pairs = list(map(lambda x: (list(map(lambda y: y[0], x)), list(map(lambda y: y[1], x))), token_weight_pairs))
 
-        target_device = model_management.text_encoder_device()
+        target_device = model_management.text_encoder_offload_device()
         zs = []
         cache = {}
         for tokens, multipliers in token_weight_pairs:

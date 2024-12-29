@@ -97,6 +97,14 @@ def KSAMPLER_sample(*args, **kwargs):
         sigmas_all = model_options.pop('sigmas', None)
         sigmas = sigmas_all if sigmas_all is not None else sigmas_
         store.sigmas = sigmas
+    
+    import comfy.k_diffusion.sampling
+    if 'Hijack' in comfy.k_diffusion.sampling.torch.__class__.__name__:
+        if getattr(comfy.k_diffusion.sampling.torch, 'init', False):
+            comfy.k_diffusion.sampling.torch.init = False
+        else:
+            if hasattr(comfy.k_diffusion.sampling, 'torch_orig'):
+                comfy.k_diffusion.sampling.torch = comfy.k_diffusion.sampling.torch_orig
     return orig_fn(*args, **kwargs)
 
 def KSampler_sample(*args, **kwargs):

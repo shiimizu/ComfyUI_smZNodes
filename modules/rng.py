@@ -11,9 +11,10 @@ class TorchHijack:
 
     We need to replace to make images generated in batches to be same as images generated individually."""
 
-    def __init__(self, generator, randn_source):
+    def __init__(self, generator, randn_source, init=True):
         self.generator = generator
         self.randn_source = randn_source
+        self.init = init
 
     def __getattr__(self, item):
         if item == 'randn_like':
@@ -62,6 +63,8 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         else:
             generator = torch.Generator(device=device).manual_seed(seed)
         return generator
+
+    generator = torch.manual_seed(seed)
     generator = generator_eta = get_generator(seed)
 
     if opts.eta_noise_seed_delta > 0:
@@ -70,6 +73,8 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
 
     # hijack randn_like
     import comfy.k_diffusion.sampling
+    if not hasattr(comfy.k_diffusion.sampling, 'torch_orig'):
+        comfy.k_diffusion.sampling.torch_orig = comfy.k_diffusion.sampling.torch
     comfy.k_diffusion.sampling.torch = TorchHijack(generator_eta, opts.randn_source)
 
     if noise_inds is None:

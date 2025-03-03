@@ -41,6 +41,23 @@ export function toggleWidget(node, widget, show = false, suffix = "") {
         widget.computedHeight = 0;
 }
 
+function toggleWidgetHTML(w, hide = null){
+  const key = "smZ-hide";
+  if (hide === null) {
+    w?.inputEl?.classList?.toggle(key);
+  } else {
+    const is_hidden = w?.inputEl?.classList?.contains(key)
+    if (hide === true) {
+      if (!is_hidden)
+        toggleWidgetHTML(w)
+    } else if (hide === false) {
+      if (is_hidden)
+        toggleWidgetHTML(w)
+    }
+  }
+}
+
+// Toggles a menu widget for both its canvas and HTML counterpart. Also accounts for group nodes.
 // Passing an array with a companion_widget_name means
 // the toggle will happen for every name that looks like it.
 // Useful for duplicates created in group nodes.
@@ -57,17 +74,19 @@ export function toggleMenuOption(node, widget_arr, _show = null, perform_action 
     }
     const widgets = companion_widget_name ? [findWidgetByName(node, nwname)] : findWidgetsByName(node, nwname)
     for (const widget of widgets)
-        toggleMenuOption0(node, widget, _show, perform_action)
+      toggle_inner(node, widget, _show, perform_action)
 }
 
-function toggleMenuOption0(node, widget, _show = null, perform_action = true) {
+function toggle_inner(node, widget, _show = null, perform_action = true) {
     if (!widget || doesInputWithNameExist(node, widget.name)) return;
     if (!origProps[widget.name]) {
         origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize};
     }
-    const show = (widget.type === origProps[widget.name].origType)
+    const __show = (widget.type === origProps[widget.name].origType)
     if (perform_action) {
-        toggleWidget(node, widget, _show !== null ? _show : !show)
+        const show = _show !== null ? _show : !__show;
+        toggleWidget(node, widget, show)
+        toggleWidgetHTML(widget, !show)
         node.setDirtyCanvas(true);
     }
 }
@@ -174,33 +193,6 @@ function applyWidgetLogic(node) {
     }
 }
 
-function toggle_all_settings_desc_widgets(node, _show = null) {
-    let found_widgets = node.widgets.filter((w) => w.name.includes('info'));
-    let is_showing = _show !== null ? _show : null
-    found_widgets.forEach(w => {
-        toggleMenuOption(node, [w.name, w.name], _show)
-        is_showing = _show !== null ? _show : w.type === origProps[w.name].origType
-    });
-
-    let w = node.widgets.find((w) => w.name === 'extra');
-    if (w) {
-        let value = null;
-        try {
-            value =JSON.parse(w.value);
-        } catch (error) {
-            // when node definitions change due to an update or some other error
-            value = {"show":true}
-        }
-        value.show = is_showing;
-        w.value = JSON.stringify(value);
-    }
-
-    // Collapse the node if the widgets aren't showing
-    if (!is_showing) {
-        node.setSize([node.size[0], node.computeSize()[1]])
-    }
-}
-
 function create_custom_option(content, _callback) {
     return {
         content: content,
@@ -271,6 +263,17 @@ function widgetLogicSettings(node) {
 _app.registerExtension({
     name: "Comfy.smZ.dynamicWidgets",
 
+    init() {
+      let style = document.createElement('style');
+      let placeholder_opacity = 0.75;
+      const createCssText = (it) => `.smZ-custom-textarea::-${it} { color: inherit; opacity: ${placeholder_opacity}}`;
+      // WebKit, IE, Firefox
+      ['webkit-input-placeholder', 'ms-input-placeholder', 'moz-placeholder']
+        .map(createCssText).forEach(it => style.appendChild(document.createTextNode(it)));
+      style.appendChild(document.createTextNode(`.smZ-hide { hidden: "hidden"; display: none; }`));
+      document.head.appendChild(style);
+    },
+
     /**
      * Called when a node is created. Used to add menu options to nodes.
      * @param node The node that was created.
@@ -278,6 +281,7 @@ _app.registerExtension({
      */
     nodeCreated(node, app) {
         const nodeType = node.type || node.constructor?.type
+        const anyType = "*";
         let inGroupNode = false
         let inGroupNode2 = false
         let nodeData = node.constructor?.nodeData
@@ -313,7 +317,7 @@ _app.registerExtension({
             
 
             // allows bypass (in conjunction with below's `allows bypass`)
-            // by setting node.inputs[0].type to a concrete type, instead of '*'. ComfyUI will complain otherwise.
+            // by setting node.inputs[0].type to a concrete type, instead of anyType. ComfyUI will complain otherwise.
             node.onBeforeConnectInput = function(inputIndex) {
                 if (inputIndex !== node.index) return inputIndex
 
@@ -323,8 +327,8 @@ _app.registerExtension({
                 if (node.constructor) node.constructor.type=tp
                 this.type = tp
                 if (this.constructor) this.constructor.type=tp
-                Object.assign(node.inputs[inputIndex], {...node.inputs[inputIndex], name: '*', type: '*'});
-                Object.assign(this.inputs[inputIndex], {...this.inputs[inputIndex], name: '*', type: '*'});
+                Object.assign(node.inputs[inputIndex], {...node.inputs[inputIndex], name: anyType, type: anyType});
+                Object.assign(this.inputs[inputIndex], {...this.inputs[inputIndex], name: anyType, type: anyType});
                 node.beforeConnectInput = true
                 this.beforeConnectInput = true
                 return inputIndex;
@@ -372,7 +376,7 @@ _app.registerExtension({
                         extra_data = JSON.parse(extra_widget.value);
                     } catch (error) {
                         // when node definitions change due to an update or some other error
-                        extra_data = {show_headings: true, show_descriptions: false, mode: '*'}
+                        extra_data = {show_headings: true, show_descriptions: false, mode: anyType}
                     }
                     extra_widget._value = extra_data
                     Object.defineProperty(extra_widget, '_value', {
@@ -391,7 +395,7 @@ _app.registerExtension({
                 Object.defineProperty(node.constructor, 'type', {
                     get() {
                         let s = new Error().stack
-                        const rr = ['rerouteNode.js']
+                        const rr = ['rerouteNode.']
                         // const rr = ['rerouteNode.js',  'reroutePrimitive.js']
                         // const rr = ['rerouteNode.js', 'groupNode.js', 'reroutePrimitive.js']
                         if (rr.some(rx => s.includes(rx))) {
@@ -418,7 +422,7 @@ _app.registerExtension({
                                 val = newVal
                                 // console.log('====== group node test. node', node, 'group', node.getInnerNodes?.())
                                 if (node.inputs && node.inputs[node.index]) node.inputs[node.index].type = newVal
-                                if (node.outputs && node.outputs[node.index]) node.outputs[node.index].name  = newVal || '*';
+                                if (node.outputs && node.outputs[node.index]) node.outputs[node.index].name  = newVal || anyType;
                                 node.properties.showOutputText = true // Reroute node accesses this
                                 node.type = nodeType
                                 if (node.constructor) node.constructor.type=nodeType
@@ -473,7 +477,7 @@ _app.registerExtension({
                 // Prevent multiple connections to different types when we have no input
                 if (connected && type === LiteGraph.OUTPUT) {
                     // Ignore wildcard nodes as these will be updated to real types
-                    const types = this.outputs?.[index]?.links ? new Set(this.outputs[index].links.map((l) => app.graph.links[l]?.type)?.filter((t) => t !== "*")) : new Set()
+                    const types = this.outputs?.[index]?.links ? new Set(this.outputs[index].links.map((l) => app.graph.links[l]?.type)?.filter((t) => t !== anyType)) : new Set()
                     if (types?.size > 1) {
                         const linksToDisconnect = [];
                         for (let i = 0; i < this.outputs[index].links.length - 1; i++) {
@@ -556,7 +560,7 @@ _app.registerExtension({
                                     node.inputs && node.inputs[link?.target_slot] && node.inputs[link.target_slot].type
                                         ? node.inputs[link.target_slot].type
                                         : null;
-                                if (inputType && inputType !== "*" && nodeOutType !== inputType) {
+                                if (inputType && inputType !== anyType && nodeOutType !== inputType) {
                                     // The output doesnt match our input so disconnect it
                                     node.disconnectInput(link.target_slot);
                                 } else {
@@ -569,7 +573,7 @@ _app.registerExtension({
                     }
                 }
 
-                const displayType = inputType || outputType || "*";
+                const displayType = inputType || outputType || anyType;
                 const color = LGraphCanvas.link_type_colors[displayType];
 
                 let widgetConfig;
@@ -580,7 +584,7 @@ _app.registerExtension({
                     // If we dont have an input type we are always wildcard but we'll show the output type
                     // This lets you change the output link to a different type and all nodes will update
                     if (!(node.outputs && node.outputs[index])) continue
-                    node.outputs[index].type = inputType || "*";
+                    node.outputs[index].type = inputType || anyType;
                     node.__outputType = displayType;
                     node.outputs[index].name = node.properties.showOutputText ? displayType : "";
                     // node.size = node.computeSize();
@@ -631,7 +635,7 @@ _app.registerExtension({
                             node.outputs[index].name = inputNode.__outputType || inputNode.outputs[index].type;
 
                             // allows bypass
-                            node.inputs[index] = Object.assign(node.inputs[0], {...node.inputs[index], name: '*', type: node.outputs[index].name});
+                            node.inputs[index] = Object.assign(node.inputs[0], {...node.inputs[index], name: anyType, type: node.outputs[index].name});
                         }
                     }
                 }
@@ -713,11 +717,3 @@ _app.registerExtension({
         }
     }
 });
-
-const placeholder_opacity = '0.75'
-const style = document.createElement('style');
-const createCssText = (x) => `.smZ-custom-textarea::-${x} {color: inherit; opacity: ${placeholder_opacity}}`
-style.appendChild(document.createTextNode(createCssText('webkit-input-placeholder'))) // Only WebKit
-style.appendChild(document.createTextNode(createCssText('ms-input-placeholder'))) // Only IE
-style.appendChild(document.createTextNode(createCssText('moz-placeholder'))) // Only Firefox
-document.head.appendChild(style);

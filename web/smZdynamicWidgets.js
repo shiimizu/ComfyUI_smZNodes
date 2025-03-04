@@ -8,7 +8,6 @@ export const widgets = ['mean_normalization', 'multi_conditioning', 'use_old_emp
 export const widgets_sdxl = ['ascore', 'width', 'height', 'crop_w', 'crop_h', 'target_width', 'target_height', 'text_g', 'text_l']
 export const getSetWidgets = new Set(['parser', 'with_SDXL'])
 
-export let origProps = {};
 export const HIDDEN_TAG = "smZhidden"
 
 export const findWidgetByName = (node, name) => node.widgets.find((w) => w.name === name);
@@ -21,74 +20,50 @@ export function round(number, increment = 10, offset = 0) {
     return Math.ceil((number - offset) / increment ) * increment + offset;
 }
 
-export function toggleWidget(node, widget, show = false, suffix = "") {
-    if (!widget || doesInputWithNameExist(node, widget.name)) return;
-    if (!origProps[widget.name]) {
-        origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize};
-    }
-    const origSize = node.size;
+export function toggleWidget(node, widget, force) {
+  if (!widget || doesInputWithNameExist(node, widget.name)) return;
+  widget.options[HIDDEN_TAG] ??= (widget.options.origType = widget.type, widget.options.origComputeSize = widget.computeSize, HIDDEN_TAG);
 
-    widget.type = show ? origProps[widget.name].origType : HIDDEN_TAG + suffix;
-    widget.computeSize = show ? origProps[widget.name].origComputeSize : () => [0, -3.3];
+  const hide = force ?? (widget.type !== HIDDEN_TAG);
 
-    widget.linkedWidgets?.forEach(w => toggleWidget(node, w, ":" + widget.name, show));
+  widget.type = hide ? widget.options[HIDDEN_TAG] : widget.options.origType;
 
-    const height = show ? Math.max(node.computeSize()[1], origSize[1]) : node.size[1];
-    node.setSize([node.size[0], height]);
-    if (show)
-        delete widget.computedHeight;
-    else
-        widget.computedHeight = 0;
-}
+  widget.computeSize = hide ? () => [0, -3.3] : widget.options.origComputeSize;
 
-function toggleWidgetHTML(w, hide = null){
-  const key = "smZ-hide";
-  if (hide === null) {
-    w?.inputEl?.classList?.toggle(key);
-  } else {
-    const is_hidden = w?.inputEl?.classList?.contains(key)
-    if (hide === true) {
-      if (!is_hidden)
-        toggleWidgetHTML(w)
-    } else if (hide === false) {
-      if (is_hidden)
-        toggleWidgetHTML(w)
-    }
-  }
+  widget.linkedWidgets?.forEach(w => toggleWidget(node, w, force));
+  
+  widget.inputEl?.classList?.toggle(HIDDEN_TAG, force);
+
+  const height = hide ? node.size[1] : Math.max(node.computeSize()[1], node.size[1]);
+  node.setSize([node.size[0], height]);
+
+  if (hide)
+      widget.computedHeight = 0;
+  else
+      delete widget.computedHeight;
 }
 
 // Toggles a menu widget for both its canvas and HTML counterpart. Also accounts for group nodes.
 // Passing an array with a companion_widget_name means
 // the toggle will happen for every name that looks like it.
 // Useful for duplicates created in group nodes.
-export function toggleMenuOption(node, widget_arr, _show = null, perform_action = true) {
+export function toggleMenuOption(node, widget_arr, show) {
     const [widget_name, companion_widget_name] = Array.isArray(widget_arr) ? widget_arr : [widget_arr]
-    let nwname = widget_name
+    let arr = [widget_name];
     // companion_widget_name to use the new name assigned in a group node to get the correct widget 
     if (companion_widget_name) {
         for (const gnc of getGroupNodeConfig(node)) {
-            const omap = Object.values(gnc.oldToNewWidgetMap).find(x => Object.values(x).find(z => z === companion_widget_name))
-            const n = omap[widget_name]
-            if(n) nwname = n;
+            const omap = Object.values(gnc.oldToNewWidgetMap).find(x => Object.values(x).find(z => z === companion_widget_name));
+            const n = omap[widget_name];
+            if(n) arr.push(n);
         }
     }
-    const widgets = companion_widget_name ? [findWidgetByName(node, nwname)] : findWidgetsByName(node, nwname)
-    for (const widget of widgets)
-      toggle_inner(node, widget, _show, perform_action)
-}
-
-function toggle_inner(node, widget, _show = null, perform_action = true) {
-    if (!widget || doesInputWithNameExist(node, widget.name)) return;
-    if (!origProps[widget.name]) {
-        origProps[widget.name] = { origType: widget.type, origComputeSize: widget.computeSize};
-    }
-    const __show = (widget.type === origProps[widget.name].origType)
-    if (perform_action) {
-        const show = _show !== null ? _show : !__show;
-        toggleWidget(node, widget, show)
-        toggleWidgetHTML(widget, !show)
-        node.setDirtyCanvas(true);
-    }
+    const widgets = companion_widget_name ? arr.map(it => findWidgetByName(node, it)) : findWidgetsByName(node, arr[0])
+    const hide = show !== undefined ? !show : undefined;
+    widgets.forEach(widget => {
+      toggleWidget(node, widget, hide)
+      node.setDirtyCanvas(true);
+    });
 }
 
 export function getGroupNodeConfig(node) {
@@ -270,7 +245,7 @@ _app.registerExtension({
       // WebKit, IE, Firefox
       ['webkit-input-placeholder', 'ms-input-placeholder', 'moz-placeholder']
         .map(createCssText).forEach(it => style.appendChild(document.createTextNode(it)));
-      style.appendChild(document.createTextNode(`.smZ-hide { hidden: "hidden"; display: none; }`));
+      style.appendChild(document.createTextNode(`.${HIDDEN_TAG} { hidden: "hidden"; display: none; }`));
       document.head.appendChild(style);
     },
 

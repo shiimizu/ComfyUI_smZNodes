@@ -43,12 +43,16 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     optional arg skip can be used to skip and discard x number of noise generations for a given seed
     """
     opts = None
+    opts_found = False
     model = _find_outer_instance('model', ModelPatcher)
-    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY, None)) is None) or opts is None:
+    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY)) is None) or opts is None:
         import comfy.samplers
         guider = _find_outer_instance('guider', comfy.samplers.CFGGuider)
         model = getattr(guider, 'model_patcher', None)
-    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY, None)) is None) or opts is None:
+    if (model is not None and (opts:=model.model_options.get(shared.Options.KEY)) is None) or opts is None:
+        pass
+    opts_found = opts is not None
+    if not opts_found:
         opts = shared.opts_default
         device = 'cpu'
 
@@ -71,11 +75,23 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         seed = min(int(seed + opts.eta_noise_seed_delta), int(0xffffffffffffffff))
         generator_eta = get_generator(seed)
 
-    # hijack randn_like
+    # ========== hijack randn_like ===============
     import comfy.k_diffusion.sampling
-    if not hasattr(comfy.k_diffusion.sampling, 'torch_orig'):
-        comfy.k_diffusion.sampling.torch_orig = comfy.k_diffusion.sampling.torch
-    comfy.k_diffusion.sampling.torch = TorchHijack(generator_eta, opts.randn_source)
+    # if not hasattr(comfy.k_diffusion.sampling, 'torch_orig'):
+    #     comfy.k_diffusion.sampling.torch_orig = comfy.k_diffusion.sampling.torch
+    # comfy.k_diffusion.sampling.torch = TorchHijack(generator_eta, opts.randn_source)
+
+    if not hasattr(comfy.k_diffusion.sampling, 'default_noise_sampler_orig'):
+        comfy.k_diffusion.sampling.default_noise_sampler_orig = comfy.k_diffusion.sampling.default_noise_sampler
+    if opts_found:
+        def default_noise_sampler(x, seed=None, *args, **kwargs):
+            th = TorchHijack(generator_eta, opts.randn_source)
+            return lambda sigma, sigma_next: th.randn_like(x)
+        comfy.k_diffusion.sampling.default_noise_sampler = default_noise_sampler
+    else:
+        comfy.k_diffusion.sampling.default_noise_sampler = comfy.k_diffusion.sampling.default_noise_sampler_orig
+    # =============================================
+
 
     if noise_inds is None:
         shape = latent_image.size()
@@ -83,7 +99,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
             return torch.asarray(generator.randn(shape), device='cpu')
         else:
             return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
-    
+
     unique_inds, inverse = np.unique(noise_inds, return_inverse=True)
     noises = []
     for i in range(unique_inds[-1]+1):
@@ -113,3 +129,4 @@ def _find_outer_instance(target:str, target_type=None, callback=None, max_len=10
         frame = frame.f_back
         i += 1
     return None
+

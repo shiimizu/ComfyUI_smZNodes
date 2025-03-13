@@ -243,18 +243,19 @@ export async function importA1111(graph, parameters) {
                 );
             }
 
-            function popOpt(name) {
+            function popOpt(name, get) {
                 const v = opts[name];
-                delete opts[name];
+                if (!get)
+                  delete opts[name];
                 return v;
             }
 
-            function basename(n) {
-                const i = n.lastIndexOf('.')
-                if (i !== -1)
-                    return n.substring(0, i)
-                else
-                    return n
+            function basename(s) {
+                let i = s.lastIndexOf('.');
+                i = i !== -1 ? i : s.length
+                let z = s.replaceAll("\\", "/").lastIndexOf("/")
+                z = z !== -1 ? z : 0
+                return s.substring(z, i)
             }
 
             graph.clear();
@@ -362,7 +363,7 @@ export async function importA1111(graph, parameters) {
                         let upscaleNode;
                         let latentNode;
 
-                        if (hrMethod.startsWith("Latent")) {
+                        if (hrMethod?.startsWith("Latent")) {
                             latentNode = upscaleNode = LiteGraph.createNode("LatentUpscale");
                             graph.add(upscaleNode);
                             samplerNode.connect(0, upscaleNode, 0);
@@ -422,7 +423,7 @@ export async function importA1111(graph, parameters) {
                     setWidgetValue(samplerNode, "steps", +v);
                 },
                 seed(v) {
-                    setWidgetValue(samplerNode, "seed", +v);
+                    setWidgetValue(samplerNode, "seed", +(popOpt("global seed", true) || v));
                 },
                 vae(v) {
                     const vbasename = basename(v)
@@ -492,8 +493,8 @@ export async function importA1111(graph, parameters) {
             }
 
             if (hrSamplerNode) {
-                setWidgetValue(hrSamplerNode, "seed", getWidget(samplerNode, "seed").value);
-                setWidgetValue(hrSamplerNode, "cfg", getWidget(samplerNode, "cfg").value);
+                setWidgetValue(hrSamplerNode, "seed", +popOpt("global seed", true) || getWidget(samplerNode, "seed").value);
+                setWidgetValue(hrSamplerNode, "cfg", +popOpt("hires cfg scale") || getWidget(samplerNode, "cfg").value);
                 setWidgetValue(hrSamplerNode, "scheduler", getWidget(samplerNode, "scheduler").value);
                 setWidgetValue(hrSamplerNode, "sampler_name", getWidget(samplerNode, "sampler_name").value);
                 setWidgetValue(hrSamplerNode, "denoise", +(popOpt("denoising strength") || "1"));

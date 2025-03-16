@@ -87,6 +87,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         def default_noise_sampler(x, seed=None, *args, **kwargs):
             th = TorchHijack(generator_eta, opts.randn_source)
             return lambda sigma, sigma_next: th.randn_like(x)
+        default_noise_sampler.init = True
         comfy.k_diffusion.sampling.default_noise_sampler = default_noise_sampler
     else:
         comfy.k_diffusion.sampling.default_noise_sampler = comfy.k_diffusion.sampling.default_noise_sampler_orig

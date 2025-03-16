@@ -54,11 +54,14 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     opts_found = opts is not None
     if not opts_found:
         opts = shared.opts_default
-        device = 'cpu'
+        device = torch.device("cpu")
 
     if opts.randn_source == 'gpu':
         import comfy.model_management
         device = comfy.model_management.get_torch_device()
+
+    device_orig = device
+    device = torch.device("cpu") if opts.randn_source == "cpu" else device_orig
 
     def get_generator(seed):
         nonlocal device, opts
@@ -68,12 +71,17 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
             generator = torch.Generator(device=device).manual_seed(seed)
         return generator
 
-    generator = torch.manual_seed(seed)
-    generator = generator_eta = get_generator(seed)
+    def get_generator_obj(seed):
+        nonlocal opts
+        generator = torch.manual_seed(seed)
+        generator = generator_eta = get_generator(seed)
+        if opts.eta_noise_seed_delta > 0:
+            seed = min(int(seed + opts.eta_noise_seed_delta), int(0xffffffffffffffff))
+            generator_eta = get_generator(seed)
+        return (generator, generator_eta)
 
-    if opts.eta_noise_seed_delta > 0:
-        seed = min(int(seed + opts.eta_noise_seed_delta), int(0xffffffffffffffff))
-        generator_eta = get_generator(seed)
+    generator, generator_eta = get_generator_obj(seed)
+    randn_source = opts.randn_source
 
     # ========== hijack randn_like ===============
     import comfy.k_diffusion.sampling
@@ -85,7 +93,8 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         comfy.k_diffusion.sampling.default_noise_sampler_orig = comfy.k_diffusion.sampling.default_noise_sampler
     if opts_found:
         def default_noise_sampler(x, seed=None, *args, **kwargs):
-            th = TorchHijack(generator_eta, opts.randn_source)
+            nonlocal generator_eta, randn_source
+            th = TorchHijack(generator_eta, randn_source)
             return lambda sigma, sigma_next: th.randn_like(x)
         default_noise_sampler.init = True
         comfy.k_diffusion.sampling.default_noise_sampler = default_noise_sampler
@@ -93,13 +102,14 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
         comfy.k_diffusion.sampling.default_noise_sampler = comfy.k_diffusion.sampling.default_noise_sampler_orig
     # =============================================
 
-
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':
-            return torch.asarray(generator.randn(shape), device='cpu')
+            noise = torch.asarray(generator.randn(shape), device='cpu')
         else:
-            return torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
+            noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
+        noise = noise.to(device=device_orig)
+        return noise
 
     unique_inds, inverse = np.unique(noise_inds, return_inverse=True)
     noises = []
@@ -109,6 +119,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
             noise = torch.asarray(generator.randn(shape), device='cpu')
         else:
             noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
+        noise = noise.to(device=device_orig)
         if i in unique_inds:
             noises.append(noise)
     noises = [noises[i] for i in inverse]

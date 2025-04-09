@@ -9,11 +9,12 @@ export const widgets_sdxl = ['ascore', 'width', 'height', 'crop_w', 'crop_h', 't
 export const getSetWidgets = new Set(['parser', 'with_SDXL'])
 
 export const HIDDEN_TAG = "smZhidden"
+export const HEADING_IDENTIFIER = "ㅤ"
 
 export const findWidgetByName = (node, name) => node.widgets.find((w) => w.name === name);
 export const findWidgetsByName = (node, name) => node.widgets.filter((w) => w.name.endsWith(name));
 
-export const doesInputWithNameExist = (node, name) => node.inputs ? node.inputs.some((input) => input.name === name) : false;
+// export const doesInputWithNameExist = (node, name) => node.inputs ? node.inputs.some((input) => input.name === name) : false;
 
 // round in increments of n, with an offset
 export function round(number, increment = 10, offset = 0) {
@@ -21,7 +22,8 @@ export function round(number, increment = 10, offset = 0) {
 }
 
 export function toggleWidget(node, widget, force) {
-  if (!widget || doesInputWithNameExist(node, widget.name)) return;
+  if (!widget) return;
+  // if (!widget || doesInputWithNameExist(node, widget.name)) return;
   widget.options[HIDDEN_TAG] ??= (widget.options.origType = widget.type, widget.options.origComputeSize = widget.computeSize, HIDDEN_TAG);
 
   const hide = force ?? (widget.type !== HIDDEN_TAG);
@@ -32,7 +34,8 @@ export function toggleWidget(node, widget, force) {
 
   widget.linkedWidgets?.forEach(w => toggleWidget(node, w, force));
   
-  widget.inputEl?.classList?.toggle(HIDDEN_TAG, force);
+  for (const el of ["inputEl", "input"])
+    widget[el]?.classList?.toggle(HIDDEN_TAG, force);
 
   const height = hide ? node.size[1] : Math.max(node.computeSize()[1], node.size[1]);
   node.setSize([node.size[0], height]);
@@ -80,15 +83,12 @@ export function getGroupNodeConfig(node) {
 
 export function widgetLogic(node, widget) {
     const wname = widget.name
+    const uoei = widgets[widgets.length - 2]
     if (wname.endsWith("parser")) {
         const in_comfy = widget?.value?.includes?.("comfy")
         // toggleMenuOption(node, ['multi_conditioning', wname], !in_comfy)
         toggleMenuOption(node, ['mean_normalization', wname], widget.value !== "comfy")
-        const uoei = 'use_old_emphasis_implementation'
-        if (findWidgetsByName(node, uoei)?.some(x => x?.value))
-            toggleMenuOption(node, [uoei, wname], true)
-        if (in_comfy)
-            toggleMenuOption(node, [uoei, wname], false)
+        toggleMenuOption(node, [uoei, wname], in_comfy ? false : findWidgetsByName(node, uoei)?.some(x => x?.value))
     } else if (wname.endsWith("with_SDXL")) {
         toggleMenuOption(node, ['text', wname], !widget.value)
         toggleMenuOption(node, ['multi_conditioning', wname], !widget.value)
@@ -119,53 +119,59 @@ export function widgetLogic(node, widget) {
 
 // Specfic to cliptextencode
 function applyWidgetLogic(node) {
-    if (!node.widgets || (node.widgets && !node.widgets.length)) return
-    if (node.widgets) {
-        let gncl = getGroupNodeConfig(node)
-        for (const w of node.widgets) {
-            for (const gsw of [...getSetWidgets]) {
-                if (!w.name.endsWith(gsw)) continue;
-                // Possibly uneeded
-                /*let shouldBreak = false
-                for (const gnc of gncl) {
-                    const nwmap = gnc.newToOldWidgetMap[w.name]
-                    console.log('=== gnc.newToOldWidgetMap',gnc.newToOldWidgetMap,'w.name',w.name,'nwmap',nwmap)
-                    // nwmap.inputName: resolved, actual widget name.
-                    if (nwmap && !(ids1.has(nwmap.node.type) && nwmap.inputName === gsw))
-                        shouldBreak = true
-                }
-                if (shouldBreak) break;*/
-                widgetLogic(node, w);
+    if (!node.widgets?.length) return;
 
-				let val = w.value;
-                Object.defineProperty(w, 'value', {
-                    get() {
-                        return val;
-                    },
-                    set(newVal) {
-						if (newVal !== val) {
-                            val = newVal
-                            widgetLogic(node, w);
-                        }
+    const uoei = widgets[widgets.length - 2]
+    const in_comfy = findWidgetsByName(node, "parser")?.some(it => it?.value?.includes?.("comfy"));
+    const uoei_w = findWidgetByName(node, uoei);
+    toggleMenuOption(node, [uoei, uoei], in_comfy ? false : uoei_w.value)
+
+    let gncl = getGroupNodeConfig(node)
+    for (const w of node.widgets) {
+        for (const gsw of [...getSetWidgets]) {
+            if (!w.name.endsWith(gsw)) continue;
+            // Possibly uneeded
+            /*
+            let shouldBreak = false
+            for (const gnc of gncl) {
+                const nwmap = gnc.newToOldWidgetMap[w.name]
+                console.log('=== gnc.newToOldWidgetMap',gnc.newToOldWidgetMap,'w.name',w.name,'nwmap',nwmap)
+                // nwmap.inputName: resolved, actual widget name.
+                if (nwmap && !(ids1.has(nwmap.node.type) && nwmap.inputName === gsw))
+                    shouldBreak = true
+            }
+            if (shouldBreak) break;
+            */
+            widgetLogic(node, w);
+
+            let val = w.value;
+            Object.defineProperty(w, 'value', {
+                get() {
+                    return val;
+                },
+                set(newVal) {
+                    if (newVal !== val) {
+                        val = newVal
+                        widgetLogic(node, w);
                     }
-                });
-
-                // Hide SDXL widget on init
-                // Doing it in nodeCreated fixes its toggling for some reason
-                if (w.name.endsWith('with_SDXL')) {
-                    toggleMenuOption(node, ['with_SDXL', w.name])
-                    w.init = true
-                    
-                    // Hide steps
-                    toggleMenuOption(node, ['smZ_steps', w.name] , false)
                 }
+            });
+
+            // Hide SDXL widget on init
+            // Doing it in nodeCreated fixes its toggling for some reason
+            if (w.name.endsWith('with_SDXL')) {
+                toggleMenuOption(node, ['with_SDXL', w.name])
+                w.init = true
+
+                // Hide steps
+                toggleMenuOption(node, ['smZ_steps', w.name], false)
             }
         }
-
-        // Reduce initial node size cause of SDXL widgets
-        // node.setSize([node.size[0], Math.max(node.size[1]/1.5, 220)])
-        node.setSize([node.size[0], 220])
     }
+
+    // Reduce initial node size cause of SDXL widgets
+    // node.setSize([node.size[0], Math.max(node.size[1]/1.5, 220)])
+    node.setSize([node.size[0] - 100, 220])
 }
 
 function create_custom_option(content, _callback) {
@@ -178,36 +184,32 @@ function create_custom_option(content, _callback) {
 function widgetLogicSettings(node) {
     const supported_types = {MODEL: 'MODEL', CLIP: 'CLIP'}
     const clip_headings = ['Stable Diffusion', 'Compatibility']
-    const clip_entries = 
+    const clip_entries =
     ["info_comma_padding_backtrack",
     "Prompt word wrap length limit",
     "enable_emphasis",
     "info_use_prev_scheduling",
     "Use previous prompt editing timelines"]
 
-    if(!node.widgets) return;
+    if(!node.widgets?.length) return;
 
     const index = node.index || 0
-    
+
     const extra = node.widgets.find(w => w.name.endsWith('extra'))
     let extra_data = extra._value
     toggleMenuOption(node, extra.name, false)
     const condition = (sup) => node.outputs?.[index] && (node.outputs[index].name === sup || node.outputs[index].type === sup) || 
                                     node.inputs?.[index] && node.inputs[index].type === sup;
-    // w._name: to make sure it's from our node. though, it should have a better name for the variable
     for (const w of node.widgets) {
         if (w.name.endsWith('extra')) continue;
-        if (node.inputs?.find(i => i.name === w.name)) {
-            w.type = 'converted-widget'
-        }
-        if(w.type === 'converted-widget') continue;
+        // w._name: to make sure it's from our node. though, it should have a better name for the variable
         if(!w._name) continue;
 
         // heading `values` won't get duplicated names due to group nodes
         // So we won't need to do `clip_headings.some()`
         // though, it should be read only...
         if (condition(supported_types.MODEL)) {
-            const flag=(clip_entries.some(str => (typeof str === 'string' && str.includes(w.name))) || (typeof w.value === 'string' && w.heading && w.value.includes('Compatibility')))
+            const flag=(clip_entries.some(str => str.includes(w.name)) || (typeof w.value === 'string' && w.heading && w.value.includes('Compatibility')))
             if (w.info && !clip_entries.some(str => str.includes(w.name)))
                 toggleMenuOption(node, [w.name, w.name], extra_data.show_descriptions)
             else if (w.heading && typeof w.value === 'string' && !w.value.includes('Compatibility'))
@@ -226,6 +228,16 @@ function widgetLogicSettings(node) {
                 toggleMenuOption(node, [w.name, w.name], flag)
         } else {
             toggleMenuOption(node, w.name, false)
+        }
+    }
+
+    let skip = [HEADING_IDENTIFIER, "info", "extra"];
+    let i = node.inputs.length;
+    while (i--) {
+        const ni = node.inputs[i];
+        const wname = ni?.widget?.name;
+        if (i !== 0 && skip.some(it => wname?.includes(it))) { 
+            node.inputs.splice(i, 1);
         }
     }
 
@@ -289,7 +301,7 @@ _app.registerExtension({
             if(!node.properties)
                 node.properties = {}
             node.properties.showOutputText = true
-            
+
 
             // allows bypass (in conjunction with below's `allows bypass`)
             // by setting node.inputs[0].type to a concrete type, instead of anyType. ComfyUI will complain otherwise.
@@ -308,7 +320,7 @@ _app.registerExtension({
                 this.beforeConnectInput = true
                 return inputIndex;
             }
-            
+
             // Call once on node creation
             node.setupWidgetLogic = function() {
                 let nt = nodeType // JSON.parse(JSON.stringify(nodeType))
@@ -329,19 +341,23 @@ _app.registerExtension({
                             w._name = w.name
                     } else
                         w._name = w.name
-                    
+
                     // Styling.
-                    if (w.name.includes('ㅤ')) {
+                    if (w.name.includes(HEADING_IDENTIFIER)) {
                         w.heading = true
                         // w.disabled = true
                     } else if (w.name.includes('info')) {
                         w.info = true
-                        w.inputEl.disabled = true;
-                        w.inputEl.readOnly = true;
-                        w.inputEl.style.alignContent = 'center';
-                        w.inputEl.style.textAlign = 'center';
-                        if (!w.inputEl.classList.contains('smZ-custom-textarea'))
-                            w.inputEl.classList.add('smZ-custom-textarea')
+                        for (const el of ["input", "inputEl"]) {
+                          if (w[el]) {
+                            w[el].disabled = true;
+                            w[el].readOnly = true;
+                            w[el].style.alignContent = 'center';
+                            w[el].style.textAlign = 'center';
+                            if (!w[el].classList.contains('smZ-custom-textarea'))
+                              w[el].classList.add('smZ-custom-textarea');
+                          }
+                        }
                     }
                 })
                 const extra_widget = node.widgets.find(w => w.name.endsWith('extra'))
@@ -370,6 +386,7 @@ _app.registerExtension({
                 Object.defineProperty(node.constructor, 'type', {
                     get() {
                         let s = new Error().stack
+                        // const rr = ['rerouteNode.', 'baseCreateRenderer']
                         const rr = ['rerouteNode.']
                         // const rr = ['rerouteNode.js',  'reroutePrimitive.js']
                         // const rr = ['rerouteNode.js', 'groupNode.js', 'reroutePrimitive.js']
@@ -447,7 +464,7 @@ _app.registerExtension({
                 if (node.constructor) node.constructor.type=nodeType
                 this.type = nodeType
                 if (this.constructor) this.constructor.type=nodeType
-            
+
 
                 // Prevent multiple connections to different types when we have no input
                 if (connected && type === LiteGraph.OUTPUT) {
@@ -507,7 +524,7 @@ _app.registerExtension({
 
                 // Find all outputs
                 const nodes = [this];
-                // const nodes = [link_info?.origin_id ? app.graph.getNodeById(link_info.origin_id).outputs ? 
+                // const nodes = [link_info?.origin_id ? app.graph.getNodeById(link_info.origin_id).outputs ?
                 //     app.graph.getNodeById(link_info.origin_id): this : this,this];
                 let outputType = null;
                 while (nodes.length) {
@@ -524,7 +541,7 @@ _app.registerExtension({
 
                             const node = app.graph.getNodeById(link.target_id);
                             const type = node.constructor.type || node.type;
-                            
+
                             if (type === "Reroute" || ids2.has(type)) {
                                 // Follow reroute nodes
                                 nodes.push(node);
@@ -668,7 +685,7 @@ _app.registerExtension({
                     // const with_SDXL = node.widgets.find(w => w.name.endsWith('with_SDXL'))
                     const parser = node.widgets.find(w => w.name.endsWith('parser'))
                     const in_comfy = parser?.value?.includes?.("comfy")
-                    let ws = widgets.map(widget_name => create_custom_option(content_hide_show + widget_name, toggleMenuOption.bind(this, node, widget_name)))
+                    let ws = widgets.map(widget_name => create_custom_option(content_hide_show + widget_name, toggleMenuOption.bind(this, node, widget_name)))      
                     ws = ws.filter((w) => (in_comfy && parser.value !== 'comfy' && w.content.includes('mean_normalization')) || (in_comfy && w.content.includes('with_SDXL')) || !in_comfy || w.content.includes('multi_conditioning') )
                     // customOptions.push(null) // seperator
                     customOptions.push(...ws)

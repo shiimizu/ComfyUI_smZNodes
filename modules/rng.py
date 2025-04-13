@@ -92,9 +92,9 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     if not hasattr(comfy.k_diffusion.sampling, 'default_noise_sampler_orig'):
         comfy.k_diffusion.sampling.default_noise_sampler_orig = comfy.k_diffusion.sampling.default_noise_sampler
     if opts_found:
+        th = TorchHijack(generator_eta, randn_source)
         def default_noise_sampler(x, seed=None, *args, **kwargs):
-            nonlocal generator_eta, randn_source
-            th = TorchHijack(generator_eta, randn_source)
+            nonlocal th
             return lambda sigma, sigma_next: th.randn_like(x)
         default_noise_sampler.init = True
         comfy.k_diffusion.sampling.default_noise_sampler = default_noise_sampler
@@ -105,7 +105,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     if noise_inds is None:
         shape = latent_image.size()
         if opts.randn_source == 'nv':
-            noise = torch.asarray(generator.randn(shape), device='cpu')
+            noise = torch.asarray(generator.randn(shape), dtype=latent_image.dtype, device=device)
         else:
             noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
         noise = noise.to(device=device_orig)
@@ -116,7 +116,7 @@ def prepare_noise(latent_image, seed, noise_inds=None, device='cpu'):
     for i in range(unique_inds[-1]+1):
         shape = [1] + list(latent_image.size())[1:]
         if opts.randn_source == 'nv':
-            noise = torch.asarray(generator.randn(shape), device='cpu')
+            noise = torch.asarray(generator.randn(shape), dtype=latent_image.dtype, device=device)
         else:
             noise = torch.randn(shape, dtype=latent_image.dtype, layout=latent_image.layout, device=device, generator=generator)
         noise = noise.to(device=device_orig)

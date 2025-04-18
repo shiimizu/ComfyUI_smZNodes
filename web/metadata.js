@@ -241,7 +241,8 @@ function getWebpMetadata(file) {
                     const chunk_type = String.fromCharCode(
                         ...webp.slice(offset, offset + 4)
                     );
-                    if (chunk_type === "EXIF") {
+                    if (chunk_type === "\0EXI") offset++;
+                    if (chunk_type === "EXIF" || chunk_type === "\0EXI") {
                         let data30 = parseExifData(webp.slice(offset + 8, offset + 8 + chunk_length));
                         for (const key in data30) {
                             const value3 = data30[key];

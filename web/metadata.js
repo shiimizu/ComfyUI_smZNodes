@@ -65,8 +65,8 @@ _app.registerExtension({
             }
             const fileName = removeExt(file.name)
             let r = null;
-            if (file.type === "image/png" || file.type === "image/webp") {
-                const pngInfo = file.type === "image/png" ? await getPngMetadata(file) : await getWebpMetadata(file);
+            async function processPngInfo(pngInfo) {
+                let r = null;
                 const workflow = pngInfo?.workflow || pngInfo?.Workflow;
                 const prompt = pngInfo?.prompt || pngInfo?.Prompt;
                 const parameters = pngInfo?.parameters || pngInfo?.Parameters;
@@ -83,14 +83,19 @@ _app.registerExtension({
                 } else {
                     app.showErrorOnFileLoad(file);
                 }
+                return r;
+            }
+            if (file.type === "image/png" || file.type === "image/webp") {
+                const pngInfo = file.type === "image/png" ? await getPngMetadata(file) : await getWebpMetadata(file);
+                r = await processPngInfo(pngInfo);
             } else if (file.type === "image/jpeg" || file.type === "image/jpg") {
-                let value = await getJpegMetadataA111(app, file);
-                if (value) {
+                let info = await getJpegMetadataA111(app, file);
+                if (info) {
                     try {
                         const isObj = o => o?.constructor === Object;
-                        let obj = JSON.parse(value);
+                        let obj = JSON.parse(info);
                         if (isObj(obj)) {
-                            // image2image workflow
+                            // image2image/text2image-hires workflow
                             console.info("Workflow from CivitAI Generator:", obj)
                             let extra = obj.extra;
                             let extraMetadata = obj.extraMetadata;
@@ -109,11 +114,11 @@ _app.registerExtension({
                         }
                     } catch (error) { }
                 } else {
-                    value = await getPngMetadata(file);
-                    if (value)
-                        r = await importA1111(app.graph, value);
+                    info = await getPngMetadata(file);
+                    if (info)
+                        r = await processPngInfo(info);
                 }
-                if (!value)
+                if (!info)
                     app.showErrorOnFileLoad(file);
             } else {
                 r = handleFile.apply(this, arguments);
@@ -270,6 +275,26 @@ function getWebpMetadata(file) {
     });
 }
 
+function groupObjectPropertiesInPlace(originalObject, groupKeys) {
+    const groupedObject = {};
+    groupKeys.forEach(groupKey => {
+        const group = {};
+        for (const key in originalObject) {
+            for (const delimiter of ["_", " "]) {
+                if (key.startsWith(groupKey + delimiter)) {
+                    const newKey = key.replace(groupKey + delimiter, "");
+                    group[newKey] = originalObject[key];
+                    delete originalObject[key];
+                }
+            }
+        }
+        if (Object.keys(group).length > 0) {
+            groupedObject[groupKey] = group;
+        }
+    });
+    Object.assign(originalObject, groupedObject);
+}
+
 export async function importA1111(graph, parameters) {
     parameters = parameters.replace(/[\u0000\u000B]/gm, "");
     const p = parameters.lastIndexOf("\nSteps:");
@@ -290,6 +315,8 @@ export async function importA1111(graph, parameters) {
 
                 if (current.includes("[{")) {
                     endDelimiter = "}]";
+                } else if (current.includes('"{')) {
+                    endDelimiter = '}"';
                 } else if (current.includes("{")) {
                     endDelimiter = "}";
                 } else if (current.includes(`"`)) {
@@ -380,6 +407,7 @@ export async function importA1111(graph, parameters) {
             function setWidgetValue(node, name, value, isOptionPrefix) {
                 if (!node) return;
                 const w = getWidget(node, name);
+                if (!w) return;
                 if (isOptionPrefix) {
                     const o = w.options.values.find((w) => w.startsWith(value));
                     if (o) {
@@ -403,6 +431,35 @@ export async function importA1111(graph, parameters) {
                     }
                 }
                 return nodes[key];
+            }
+
+            /**
+             * Initializes a node using all the properties in a group.
+             * @param {object} v The nested object after grouping.
+             * @param {string} groupKey Name of the group object.
+             * @param {string} nodeKey Name of key in `nodes` object.
+             * @param {string} nodeName Name of node used to `LiteGraph.createNode`. Derives from `nodeKey` if `undefined`.
+             */
+            function initPropertiesNode(v, groupKey, nodeKey, nodeName) {
+                if (typeof v !== "object" && Object.keys(v).length !== 0) {
+                    opts[groupKey] = v;
+                    return;
+                }
+                const node = initNode(nodeKey, nodeName);
+                if (v.enabled) {
+                    if (v.enabled.toLowerCase() !== "true")
+                        node.mode = 4;
+                    delete v["enabled"];
+                }
+                for (const [key, value] of Object.entries(v)) {
+                    let vv = value;
+                    if (value === "True")
+                        vv = true;
+                    else if (value === "False")
+                        vv = false;
+                    setWidgetValue(node, key, vv);
+                }
+                return node;
             }
 
             // Fuzzy search. Hash checking would be better.
@@ -504,6 +561,14 @@ export async function importA1111(graph, parameters) {
                 return s.substring(z, i);
             }
 
+            function fuzzySearch(node, widget_name, v) {
+                const vbasename = basename(v);
+                const w = getWidget(node, widget_name);
+                const o = w.options.values.map((n) => ({ name: n, similarity: stringSimilarity(vbasename, basename(n)) }));
+                o.sort((a, b) => b.similarity - a.similarity);
+                return o?.[0]?.name ? (o[0].similarity > similarityThreshold ? o[0].name : v) : v;
+            }
+
             graph.clear();
             graph.add(ckptNode);
             graph.add(clipSkipNode);
@@ -530,16 +595,7 @@ export async function importA1111(graph, parameters) {
 
             const handlers = {
                 model(v) {
-                    const vbasename = basename(v);
-                    const w = getWidget(ckptNode, "ckpt_name");
-                    const o = w.options.values.map((w) => ({ name: w, similarity: stringSimilarity(vbasename, basename(w)) }));
-                    o.sort((a, b) => b.similarity - a.similarity);
-                    setWidgetValue(
-                        ckptNode,
-                        "ckpt_name",
-                        o?.[0]?.name ? (o[0].similarity > similarityThreshold ? o[0].name : v) : v,
-                        true
-                    );
+                    setWidgetValue(ckptNode, "ckpt_name", fuzzySearch(ckptNode, "ckpt_name", v), true);
                 },
                 "cfg scale"(v) {
                     setWidgetValue(samplerNode, "cfg", +v);
@@ -683,24 +739,42 @@ export async function importA1111(graph, parameters) {
                     setWidgetValue(samplerNode, "seed", +(popOpt("global seed", true) || v));
                 },
                 vae(v) {
-                    const vbasename = basename(v);
-                    const w = getWidget(vaeLoaderNode, "vae_name");
-                    const o = w.options.values.map((w) => ({ name: w, similarity: stringSimilarity(vbasename, basename(w)) }));
-                    o.sort((a, b) => b.similarity - a.similarity);
-                    setWidgetValue(
-                        vaeLoaderNode,
-                        "vae_name",
-                        o?.[0]?.name ? (o[0].similarity > similarityThreshold ? o[0].name : v) : v,
-                        true
-                    );
+                    setWidgetValue(vaeLoaderNode, "vae_name", fuzzySearch(vaeLoaderNode, "vae_name", v), true);
+                },
+                "module 1"(v) {
+                    this.vae(v);
+                },
+                "module 2"(v) {
+                    const w = getWidget(ckptNode, "ckpt_name");
+                    if (w?.value && w.value.toLowerCase().includes("flux") && opts["module 3"]) {
+                        const node = initNode("DualCLIPLoaderNode", "DualCLIPLoader");
+                        setWidgetValue(node, "clip_name1", fuzzySearch(node, "clip_name1", v), true);
+                        setWidgetValue(node, "clip_name2", fuzzySearch(node, "clip_name2", opts["module 3"]), true);
+                        setWidgetValue(node, "type", "flux", true);
+                        node.connect(0, clipSkipNode, 0);
+                    } else {
+                        opts["module 2"] = v;
+                    }
+                },
+                ["hires steps"](v) {
+                    const o = +v;
+                    if (o) setWidgetValue(hrSamplerNode, "steps", o);
                 },
                 "noise schedule"(v) {
                     const node = initNode("modelSamplingDiscreteNode", "ModelSamplingDiscrete");
-                    const w = getWidget(ckptNode, "ckpt_name");
                     if (v === "Zero Terminal SNR") {
                         setWidgetValue(node, "zsnr", true);
-                        if (w.value && w.value.toLowerCase().includes("vpred"))
-                            setWidgetValue(node, "sampling", "v_prediction");
+                        setWidgetValue(node, "sampling", "v_prediction");
+                    }
+                },
+                "discrete"(v) {
+                    const node = initPropertiesNode(v, "discrete", "modelSamplingDiscrete2Node", "ModelSamplingDiscrete");
+                    if (opts.advanced_sampling_mode === "Discrete")
+                        delete opts.advanced_sampling_mode;
+                    if (opts.advanced_sampling_enabled) {
+                        if (opts.advanced_sampling_enabled?.toLowerCase() !== "true")
+                            node.mode = 4;
+                        delete opts.advanced_sampling_enabled;
                     }
                 },
                 "rescale_cfg_enabled"(v) {
@@ -711,13 +785,6 @@ export async function importA1111(graph, parameters) {
                 "rescale_cfg_multiplier"(v) {
                     const node = initNode("rescaleCFGNode", "RescaleCFG");
                     setWidgetValue(node, "multiplier", +v);
-                },
-                "module 1"(v) {
-                    this.vae(v);
-                },
-                ["hires steps"](v) {
-                    const o = +v;
-                    if (o) setWidgetValue(hrSamplerNode, "steps", o);
                 },
                 eta(v) {
                     const o = +v;
@@ -744,23 +811,27 @@ export async function importA1111(graph, parameters) {
                     if (o) setWidgetValue(settingsNode, "ENSD", o);
                 },
                 rng(v) {
-                    const oo = v.toLowerCase();
-                    const w = getWidget(settingsNode, "RNG");
-                    const o = w.options.values.find((w) => w === oo);
-                    if (o) setWidgetValue(settingsNode, "RNG", o);
+                    setWidgetValue(settingsNode, "RNG", v, true);
                 },
                 ["sgm noise multiplier"](v) {
-                    let o = v;
-                    if (typeof o === "string") o = v.toLowerCase();
-                    setWidgetValue(settingsNode, "sgm_noise_multiplier", o || o === "true");
+                    setWidgetValue(settingsNode, "sgm_noise_multiplier", v.toLowerCase?.() === "true");
                 },
                 ["pad conds"](v) {
-                    let o = v;
-                    if (typeof o === "string") o = v.toLowerCase();
-                    setWidgetValue(settingsNode, "pad_cond_uncond", o || o === "true");
+                    setWidgetValue(settingsNode, "pad_cond_uncond", v.toLowerCase?.() === "true");
                 },
                 ["skip early cfg"](v) {
                     setWidgetValue(settingsNode, "skip_early_cond", +v);
+                },
+                ["ngms"](v) {
+                    setWidgetValue(settingsNode, "NGMS", +v);
+                },
+                emphasis(v) {
+                    if (v && v.toLowerCase() === "no norm") {
+                        setWidgetValue(positiveNode, "mean_normalization", false);
+                        setWidgetValue(negativeNode, "mean_normalization", false);
+                    } else {
+                        opts["emphasis"] = v;
+                    }
                 },
                 "sd upscale upscaler"(v) {
                     const node = initNode("SDUpscaleNode", "UpscaleModelLoader");
@@ -774,80 +845,60 @@ export async function importA1111(graph, parameters) {
                     const node = initNode("tomePatchModelHrNode", "TomePatchModel");
                     setWidgetValue(node, "ratio", +v);
                 },
-                "freeu_enabled"(v) {
-                    const node = initNode("FreeU_V2Node");
-                    if (v.toLowerCase() !== "true")
-                        node.mode = 4;
+                "freeu"(v) {
+                    initPropertiesNode(v, "freeu", "FreeU_V2Node");
                 },
-                "freeu_b1"(v) {
-                    const node = initNode("FreeU_V2Node");
-                    setWidgetValue(node, "b1", +v);
+                "sag"(v) {
+                    initPropertiesNode(v, "sag", "selfAttentionGuidanceNode");
                 },
-                "freeu_b2"(v) {
-                    const node = initNode("FreeU_V2Node");
-                    setWidgetValue(node, "b2", +v);
+                "pag"(v) {
+                    initPropertiesNode(v, "pag", "perturbedAttentionNode");
                 },
-                "freeu_s1"(v) {
-                    const node = initNode("FreeU_V2Node");
-                    setWidgetValue(node, "s1", +v);
+                "multidiffusion"(v) {
+                    initPropertiesNode(v, "multidiffusion", "tiledDiffusionNode");
                 },
-                "freeu_s2"(v) {
-                    const node = initNode("FreeU_V2Node");
-                    setWidgetValue(node, "s2", +v);
-                },
-                "sag_enabled"(v) {
-                    const node = initNode("selfAttentionGuidanceNode");
-                    if (v.toLowerCase() !== "true")
-                        node.mode = 4;
-                },
-                "sag_scale"(v) {
-                    const node = initNode("selfAttentionGuidanceNode");
-                    setWidgetValue(node, "scale", +v);
-                },
-                "sag_blur_sigma"(v) {
-                    const node = initNode("selfAttentionGuidanceNode");
-                    setWidgetValue(node, "blur_sigma", +v);
-                },
-                "sag_blur_sigma"(v) {
-                    const node = initNode("selfAttentionGuidanceNode");
-                    setWidgetValue(node, "blur_sigma", +v);
-                },
-
-                emphasis(v) {
-                    if (v && v.toLowerCase() === "no norm") {
-                        setWidgetValue(positiveNode, "mean_normalization", false);
-                        setWidgetValue(negativeNode, "mean_normalization", false);
-                    } else {
-                        opts["emphasis"] = v;
+                "tiled diffusion"(v) {
+                    const vv = v.replaceAll("'", '"').replaceAll("True", 'true').replaceAll("False", 'False').slice(1, v.length - 1);
+                    let obj;
+                    try {
+                        obj = JSON.parse(vv);
+                    } catch (e) { }
+                    if (!obj) return;
+                    obj["scale factor"] = popOpt("tiled diffusion scale factor");
+                    obj["upscaler"] = popOpt("tiled diffusion upscaler");
+                    const node = initNode("tiledDiffusion2Node", "TiledDiffusion");
+                    const cf = 8;
+                    setWidgetValue(node, "method", obj["Method"], true);
+                    setWidgetValue(node, "tile_width", +obj["Latent tile width"] * cf);
+                    setWidgetValue(node, "tile_height", +obj["Latent tile height"] * cf);
+                    setWidgetValue(node, "tile_overlap", +obj["Overlap"] * cf);
+                    setWidgetValue(node, "tile_batch_size", +obj["Tile batch size"]);
+                    if (obj["upscaler"] && obj["scale factor"]) {
+                        const upscalerNode = initNode("TDUpscaleModelLoaderNode", "UpscaleModelLoader");
+                        setWidgetValue(upscalerNode, "model_name", fuzzySearch(upscalerNode, "model_name", obj["upscaler"]), true);
+                        setWidgetValue(node, "method", obj["Method"], true);
+                        const w = getWidget(imageNode, "width").value;
+                        const h = getWidget(imageNode, "height").value;
+                        setWidgetValue(imageNode, "width", w / +obj["scale factor"]);
+                        setWidgetValue(imageNode, "height", h / +obj["scale factor"]);
+                        const ImageUpscaleWithModelTDNode = initNode("ImageUpscaleWithModelTDNode", "ImageUpscaleWithModel");
+                        const LoadImageTDNode = initNode("LoadImageTDNode", "LoadImage");
+                        const ImageScaleTDNode = initNode("ImageScaleTDNode", "ImageScale");
+                        const VAEEncodeTDNode = initNode("VAEEncodeTDNode", "VAEEncode");
+                        upscalerNode.connect(0, ImageUpscaleWithModelTDNode, 0)
+                        LoadImageTDNode.connect(0, ImageUpscaleWithModelTDNode, 1)
+                        ImageUpscaleWithModelTDNode.connect(0, ImageScaleTDNode, 0)
+                        setWidgetValue(ImageScaleTDNode, "width", w);
+                        setWidgetValue(ImageScaleTDNode, "height", h);
+                        ImageScaleTDNode.connect(0, VAEEncodeTDNode, 0);
+                        vaeLoaderNode.connect(0, VAEEncodeTDNode, 1);
+                        VAEEncodeTDNode.connect(0, samplerNode, 3);
                     }
                 },
-                "multidiffusion_enabled"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    if (v.toLowerCase() !== "true")
-                        node.mode = 4;
-                },
-                "multidiffusion_method"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    setWidgetValue(node, "method", "Mixture of Diffusers", true);
-                },
-                "multidiffusion_tile_width"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    setWidgetValue(node, "tile_width", +v);
-                },
-                "multidiffusion_tile_height"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    setWidgetValue(node, "tile_height", +v);
-                },
-                "multidiffusion_tile_overlap"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    setWidgetValue(node, "tile_overlap", +v);
-                },
-                "multidiffusion_tile_batch_size"(v) {
-                    const node = initNode("tiledDiffusionNode");
-                    setWidgetValue(node, "tile_batch_size", +v);
-                },
-                "ultimate sd upscale upscaler"(v) {
-                    const node = initNode(v === "None" ? "UltimateSDUpscaleNoUpscaleNode" : "UltimateSDUpscaleNode");
+                "ultimate sd upscale"(v) {
+                    const nodeKey = v.upscaler === "None" ? "UltimateSDUpscaleNoUpscaleNode" : "UltimateSDUpscaleNode";
+                    const node = initPropertiesNode(v, "ultimate sd upscale", nodeKey);
+                    if (v.upscaler && node) delete v["upscaler"];
                     for (const k of ["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]) {
                         let val = getWidget(samplerNode, k).value;
                         if (k === "denoise")
@@ -857,30 +908,29 @@ export async function importA1111(graph, parameters) {
                     positiveNode.connect(0, node, 2);
                     negativeNode.connect(0, node, 3);
                     vaeLoaderNode.connect(0, node, 4);
-                    const USDUpscaleSaveImageNode = initNode("USDUpscaleSaveImageNode", "SaveImage");
-                    node.connect(0, USDUpscaleSaveImageNode, 0);
+                    const _saveImageNode = initNode("USDUpscaleSaveImageNode", "SaveImage");
+                    node.connect(0, _saveImageNode, 0);
                 },
-                "ultimate sd upscale tile_width"(v) {
-                    const node = nodes.UltimateSDUpscaleNoUpscaleNode ?? nodes.UltimateSDUpscaleNode;
-                    setWidgetValue(node, "tile_width", +v);
-                },
-                "ultimate sd upscale tile_height"(v) {
-                    const node = nodes.UltimateSDUpscaleNoUpscaleNode ?? nodes.UltimateSDUpscaleNode;
-                    setWidgetValue(node, "tile_height", +v);
-                },
-                "ultimate sd upscale mask_blur"(v) {
-                    const node = nodes.UltimateSDUpscaleNoUpscaleNode ?? nodes.UltimateSDUpscaleNode;
-                    setWidgetValue(node, "mask_blur", +v);
-                },
-                "ultimate sd upscale padding"(v) {
-                    const node = nodes.UltimateSDUpscaleNoUpscaleNode ?? nodes.UltimateSDUpscaleNode;
-                    setWidgetValue(node, "tile_padding", +v);
-                },
+                "latent_modifier"(v) {
+                    const node = initPropertiesNode(v, "latent_modifier", "latentModifierNode", "Latent Diffusion Mega Modifier");
+                    const seed = getWidget(samplerNode, "seed").value;
+                    setWidgetValue(node, "seed", seed);
+                }
             };
 
             if (hrSamplerNode) {
                 setWidgetValue(hrSamplerNode, "steps", getWidget(samplerNode, "steps").value);
             }
+
+            const groupKeys = [
+                "freeu",
+                "multidiffusion",
+                "ultimate sd upscale",
+                "latent_modifier",
+                "sag", "pag",
+                "discrete",
+            ];
+            groupObjectPropertiesInPlace(opts, groupKeys);
 
             for (const opt in opts) {
                 handlers[opt]?.(popOpt(opt));
@@ -921,15 +971,19 @@ export async function importA1111(graph, parameters) {
                 }
             }
 
+            connectModelNode("latentModifierNode", true);
             connectModelNode("modelSamplingDiscreteNode", true);
+            connectModelNode("modelSamplingDiscrete2Node", true);
             connectModelNode("rescaleCFGNode", true);
             connectModelNode("FreeU_V2Node", true);
             connectModelNode("selfAttentionGuidanceNode", true);
+            connectModelNode("perturbedAttentionNode", true);
             connectModelNode("tiledDiffusionNode", true);
+            connectModelNode("tiledDiffusion2Node", true);
             connectModelNode("tomePatchModelNode");
             const USDUNode = nodes.UltimateSDUpscaleNoUpscaleNode ?? nodes.UltimateSDUpscaleNode;
             if (USDUNode)
-                currentModelNode.connect(0, USDUNode, 0);
+                currentModelNode.connect(0, USDUNode, 1);
 
             currentModelNode.connect(0, samplerNode, 0);
             currentModelNode = prevModelNode;
@@ -945,7 +999,8 @@ export async function importA1111(graph, parameters) {
                 delete opts[opt];
             }
 
-            console.warn("Unhandled parameters:", opts);
+            if (Object.keys(opts).length)
+                console.warn("Unhandled parameters:", opts);
         }
     }
 }

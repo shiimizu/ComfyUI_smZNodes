@@ -67,15 +67,18 @@ _app.registerExtension({
             let r = null;
             if (file.type === "image/png" || file.type === "image/webp") {
                 const pngInfo = file.type === "image/png" ? await getPngMetadata(file) : await getWebpMetadata(file);
-                if (pngInfo?.workflow) {
-                    r = await app.loadGraphData(JSON.parse(pngInfo.workflow), true, true, fileName);
-                } else if (pngInfo?.prompt) {
-                    r = app.loadApiJson(JSON.parse(pngInfo.prompt), fileName);
-                } else if (pngInfo?.parameters) {
+                const workflow = pngInfo?.workflow || pngInfo?.Workflow;
+                const prompt = pngInfo?.prompt || pngInfo?.Prompt;
+                const parameters = pngInfo?.parameters || pngInfo?.Parameters;
+                if (workflow) {
+                    r = await app.loadGraphData(JSON.parse(workflow), true, true, fileName);
+                } else if (prompt) {
+                    r = app.loadApiJson(JSON.parse(prompt), fileName);
+                } else if (parameters) {
                     // Note: Not putting this in `importA1111` as it is mostly not used
                     // by external callers, and `importA1111` has no access to `app`.
                     // useWorkflowService().beforeLoadNewGraph()
-                    r = await importA1111(app.graph, pngInfo.parameters)
+                    r = await importA1111(app.graph, parameters)
                     // useWorkflowService().afterLoadNewGraph(fileName, app.graph.serialize())
                 } else {
                     app.showErrorOnFileLoad(file);

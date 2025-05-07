@@ -171,7 +171,7 @@ function applyWidgetLogic(node) {
 
     // Reduce initial node size cause of SDXL widgets
     // node.setSize([node.size[0], Math.max(node.size[1]/1.5, 220)])
-    node.setSize([node.size[0] - 100, 220])
+    node.setSize([node.size[0], 220])
 }
 
 function create_custom_option(content, _callback) {

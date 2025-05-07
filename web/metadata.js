@@ -248,6 +248,9 @@ function getWebpMetadata(file) {
                     );
                     if (chunk_type === "\0EXI") offset++;
                     if (chunk_type === "EXIF" || chunk_type === "\0EXI") {
+                        if (String.fromCharCode(...webp.slice(offset + 8, offset + 8 + 6)) == "Exif\0\0") {
+                            offset += 6;
+                        }
                         let data30 = parseExifData(webp.slice(offset + 8, offset + 8 + chunk_length));
                         for (const key in data30) {
                             const value3 = data30[key];
@@ -822,7 +825,7 @@ export async function importA1111(graph, parameters) {
                 ["skip early cfg"](v) {
                     setWidgetValue(settingsNode, "skip_early_cond", +v);
                 },
-                ["ngms"](v) {
+                ngms(v) {
                     setWidgetValue(settingsNode, "NGMS", +v);
                 },
                 emphasis(v) {
@@ -845,25 +848,28 @@ export async function importA1111(graph, parameters) {
                     const node = initNode("tomePatchModelHrNode", "TomePatchModel");
                     setWidgetValue(node, "ratio", +v);
                 },
-                "freeu"(v) {
+                freeu(v) {
                     initPropertiesNode(v, "freeu", "FreeU_V2Node");
                 },
-                "sag"(v) {
+                sag(v) {
                     initPropertiesNode(v, "sag", "selfAttentionGuidanceNode");
                 },
-                "pag"(v) {
+                pag(v) {
                     initPropertiesNode(v, "pag", "perturbedAttentionNode");
                 },
-                "multidiffusion"(v) {
+                multidiffusion(v) {
                     initPropertiesNode(v, "multidiffusion", "tiledDiffusionNode");
                 },
                 "tiled diffusion"(v) {
-                    const vv = v.replaceAll("'", '"').replaceAll("True", 'true').replaceAll("False", 'False').slice(1, v.length - 1);
+                    const vv = v.replaceAll("'", '"').replaceAll("True", "true").replaceAll("False", "false").slice(1, v.length - 1);
                     let obj;
                     try {
                         obj = JSON.parse(vv);
                     } catch (e) { }
-                    if (!obj) return;
+                    if (!obj) {
+                        opts["tiled diffusion"] = v;
+                        return;
+                    }
                     obj["scale factor"] = popOpt("tiled diffusion scale factor");
                     obj["upscaler"] = popOpt("tiled diffusion upscaler");
                     const node = initNode("tiledDiffusion2Node", "TiledDiffusion");

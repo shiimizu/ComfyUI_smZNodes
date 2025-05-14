@@ -474,22 +474,29 @@ class CFGDenoiser:
             model_options['cfg_result'] = cfg_result
         return cfg_result
 
-def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
+def tokenize_with_weights_custom(self, text:str, return_word_ids=False, tokenizer_options={}, **kwargs):
     '''
     Takes a prompt and converts it to a list of (token, weight, word id) elements.
     Tokens can both be integer tokens and pre computed CLIP tensors.
     Word id values are unique per word and embedding, where the id 0 is reserved for non word tokens.
     Returned list has the dimensions NxM where M is the input size of CLIP
     '''
+    min_length = tokenizer_options.get("{}_min_length".format(self.embedding_key), self.min_length)
+    min_padding = tokenizer_options.get("{}_min_padding".format(self.embedding_key), self.min_padding)
 
     text = escape_important(text)
     parsed_weights = token_weights(text, 1.0)
     embr = EmbbeddingRegex(self.embedding_directory)
 
-    #tokenize words
+    # tokenize words
     tokens = []
     for weighted_segment, weight in parsed_weights:
-        to_tokenize = unescape_important(weighted_segment).replace("\n", " ").split(' ')
+        to_tokenize = unescape_important(weighted_segment)
+        split = re.split(' {0}|\n{0}'.format(self.embedding_identifier), to_tokenize)
+        to_tokenize = [split[0]]
+        for i in range(1, len(split)):
+            to_tokenize.append("{}{}".format(self.embedding_identifier, split[i]))
+
         to_tokenize = [x for x in to_tokenize if x != ""]
         for word in to_tokenize:
             matches = embr.pattern.finditer(word)
@@ -497,7 +504,7 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
             leftovers=[]
             for _, match in enumerate(matches, start=1):
                 start=match.start()
-                end=match.end()
+                end_match=match.end()
                 if (fragment:=word[last_end:start]):
                     leftovers.append(fragment)
                 ext = (match.group(4) or (match.group(3) or ''))
@@ -513,11 +520,15 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                             tokens.append([(embed, weight)])
                         else:
                             tokens.append([(embed[x], weight) for x in range(embed.shape[0])])
-                last_end = end
+                last_end = end_match
             if (fragment:=word[last_end:]):
                 leftovers.append(fragment)
                 word_new = ''.join(leftovers)
-                tokens.append([(t, weight) for t in self.tokenizer(word_new)["input_ids"][self.tokens_start:-1]])
+                end = 999999999999
+                if self.tokenizer_adds_end_token:
+                    end = -1
+                #parse word
+                tokens.append([(t, weight) for t in self.tokenizer(word_new)["input_ids"][self.tokens_start:end]])
 
     #reshape token array to CLIP input size
     batched_tokens = []
@@ -528,18 +539,24 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
     for i, t_group in enumerate(tokens):
         #determine if we're going to try and keep the tokens in a single batch
         is_large = len(t_group) >= self.max_word_length
+        if self.end_token is not None:
+            has_end_token = 1
+        else:
+            has_end_token = 0
 
         while len(t_group) > 0:
-            if len(t_group) + len(batch) > self.max_length - 1:
-                remaining_length = self.max_length - len(batch) - 1
+            if len(t_group) + len(batch) > self.max_length - has_end_token:
+                remaining_length = self.max_length - len(batch) - has_end_token
                 #break word in two and add end token
                 if is_large:
                     batch.extend([(t,w,i+1) for t,w in t_group[:remaining_length]])
-                    batch.append((self.end_token, 1.0, 0))
+                    if self.end_token is not None:
+                        batch.append((self.end_token, 1.0, 0))
                     t_group = t_group[remaining_length:]
                 #add end token and pad
                 else:
-                    batch.append((self.end_token, 1.0, 0))
+                    if self.end_token is not None:
+                        batch.append((self.end_token, 1.0, 0))
                     if self.pad_to_max_length:
                         batch.extend([(self.pad_token, 1.0, 0)] * (remaining_length))
                 #start new batch
@@ -552,11 +569,14 @@ def tokenize_with_weights_custom(self, text:str, return_word_ids=False):
                 t_group = []
 
     #fill last batch
-    batch.append((self.end_token, 1.0, 0))
-    if self.pad_to_max_length:
+    if self.end_token is not None:
+        batch.append((self.end_token, 1.0, 0))
+    if min_padding is not None:
+        batch.extend([(self.pad_token, 1.0, 0)] * min_padding)
+    if self.pad_to_max_length and len(batch) < self.max_length:
         batch.extend([(self.pad_token, 1.0, 0)] * (self.max_length - len(batch)))
-    if self.min_length is not None and len(batch) < self.min_length:
-        batch.extend([(self.pad_token, 1.0, 0)] * (self.min_length - len(batch)))
+    if min_length is not None and len(batch) < min_length:
+        batch.extend([(self.pad_token, 1.0, 0)] * (min_length - len(batch)))
 
     if not return_word_ids:
         batched_tokens = [[(t, w) for t, w,_ in x] for x in batched_tokens]

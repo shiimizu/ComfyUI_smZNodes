@@ -30,6 +30,12 @@ export function toggleWidget(node, widget, force) {
 
   widget.type = hide ? widget.options[HIDDEN_TAG] : widget.options.origType;
 
+  if (hide) {
+    widget.hidden = true;
+  } else {
+    delete widget.hidden;
+  }
+
   widget.computeSize = hide ? () => [0, -3.3] : widget.options.origComputeSize;
 
   widget.linkedWidgets?.forEach(w => toggleWidget(node, w, force));

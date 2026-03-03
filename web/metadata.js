@@ -121,7 +121,7 @@ _app.registerExtension({
                 if (!info)
                     app.showErrorOnFileLoad(file);
             } else {
-                r = handleFile.apply(this, arguments);
+                r = handleFile.apply(app, arguments);
             }
             return r;
         };

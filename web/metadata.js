@@ -266,7 +266,12 @@ function getWebpMetadata(file) {
                         }
                         break;
                     }
-                    offset += 8 + chunk_length;
+                    // RIFF pads odd-length chunks to an even boundary, so the
+                    // next chunk starts one byte later than size alone implies.
+                    // Without this, an odd chunk (commonly ALPH, from any image
+                    // with an alpha channel) shifts every subsequent read by one
+                    // and EXIF is never found.
+                    offset += 8 + chunk_length + (chunk_length % 2);
                 }
             } catch (e) {
                 r2({});

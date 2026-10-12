@@ -968,7 +968,7 @@ export async function importA1111(graph, parameters, beforeGraphClear) {
                 if (settingsNode) setWidgetValue(settingsNode, "ENSD", +v);
             },
             rng(v) {
-                if (settingsNode) setWidgetValue(settingsNode, "RNG", v, true);
+                if (settingsNode) setWidgetValue(settingsNode, "RNG", String(v).toLowerCase(), true);
             },
             ["sgm noise multiplier"](v) {
                 if (settingsNode) setWidgetValue(settingsNode, "sgm_noise_multiplier", String(v).toLowerCase() === "true");

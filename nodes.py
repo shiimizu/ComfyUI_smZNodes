@@ -112,51 +112,27 @@ class smZ_CLIPTextEncode(BaseComfyNode):
     # CATEGORY = "conditioning"
 
     @classmethod
-    def execute(cls, clip: comfy.sd.CLIP, parser="comfy", mean_normalization=True,
-                use_old_emphasis_implementation=False, mode=None, smZ_steps=1, **kwargs):
+    def execute(cls, clip: comfy.sd.CLIP, parser="comfy", mode={}, smZ_steps=1, **kwargs):
         # Resolve inputs whether coming from DynamicCombo or legacy kwargs
-        if isinstance(mode, dict):
-            selected = mode.get("mode", "Standard").lower()
-            if selected == "sdxl":
-                with_SDXL = True
-                text = kwargs.get("text", "")
-                multi_conditioning = False
-                text_g = mode.get("text_g", "")
-                text_l = mode.get("text_l", "")
-                ascore = float(mode.get("ascore", 6.0))
-                width = int(mode.get("width", 1024))
-                height = int(mode.get("height", 1024))
-                crop_w = int(mode.get("crop_w", 0))
-                crop_h = int(mode.get("crop_h", 0))
-                target_width = int(mode.get("target_width", 1024))
-                target_height = int(mode.get("target_height", 1024))
-            else:
-                with_SDXL = False
-                text = mode.get("text", "")
-                multi_conditioning = mode.get("multi_conditioning", True)
-                text_g = ""
-                text_l = ""
-                ascore = 6.0
-                width = 1024
-                height = 1024
-                crop_w = 0
-                crop_h = 0
-                target_width = 1024
-                target_height = 1024
-        else:
-            with_SDXL = kwargs.get("with_SDXL", False)
-            text = kwargs.get("text", "")
-            multi_conditioning = kwargs.get("multi_conditioning", True)
-            text_g = kwargs.get("text_g", "")
-            text_l = kwargs.get("text_l", "")
-            ascore = float(kwargs.get("ascore", 6.0))
-            width = int(kwargs.get("width", 1024))
-            height = int(kwargs.get("height", 1024))
-            crop_w = int(kwargs.get("crop_w", 0))
-            crop_h = int(kwargs.get("crop_h", 0))
-            target_width = int(kwargs.get("target_width", 1024))
-            target_height = int(kwargs.get("target_height", 1024))
-
+        kv = {}
+        kv.update(mode)
+        kv.update(kwargs)
+        selected = kv.get("mode", "Standard")
+        with_SDXL = selected == "SDXL"
+        mean_normalization = kv["mean_normalization"]
+        multi_conditioning = kv["multi_conditioning"]
+        use_old_emphasis_implementation = kv["use_old_emphasis_implementation"]
+        text = kv.get("text", "")
+        text_g = kv.get("text_g", "")
+        text_l = kv.get("text_l", "")
+        ascore = float(kv.get("ascore", 6.0))
+        width = int(kv.get("width", 1024))
+        height = int(kv.get("height", 1024))
+        crop_w = int(kv.get("crop_w", 0))
+        crop_h = int(kv.get("crop_h", 0))
+        target_width = int(kv.get("target_width", 1024))
+        target_height = int(kv.get("target_height", 1024))
+        
         from .modules.shared import Options, opts, opts_default
         debug = opts.debug
         if (opts_new := clip.patcher.model_options.get(Options.KEY, None)) is not None:
@@ -173,16 +149,28 @@ class smZ_CLIPTextEncode(BaseComfyNode):
         is_sdxl = "SDXL" in class_name
         on_sdxl = with_SDXL and is_sdxl
         opts.prompt_attention = cls.PARSER_MAP.get(parser, "Comfy parser")
+        def dynamic_call(cls, primary, fallback):
+            """Returns the ready-to-call method, auto-instantiating the class only if it's an instance method."""
+            func = getattr(cls, primary, getattr(cls, fallback, None))
+            if func is None:
+                raise AttributeError(f"Neither '{primary}' nor '{fallback}' found on {cls.__name__}")
+                
+            # Check if it is a regular instance method (unbound on the class)
+            is_instance_method = hasattr(func, '__qualname__') and '.' in func.__qualname__ and not hasattr(func, '__self__')
+            
+            obj = cls() if is_instance_method else cls
+            return getattr(obj, func.__name__)
+
 
         def _comfy_path(c_clip, c_text):
             if on_sdxl and class_name == "SDXLClipModel":
-                return CLIPTextEncodeSDXL().encode(c_clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
+                return dynamic_call(CLIPTextEncodeSDXL, 'encode', 'execute')(c_clip, width, height, crop_w, crop_h, target_width, target_height, text_g, text_l)
             elif on_sdxl and class_name == "SDXLRefinerClipModel":
                 from comfy_extras.nodes_clip_sdxl import CLIPTextEncodeSDXLRefiner
-                return CLIPTextEncodeSDXLRefiner().encode(c_clip, c_clip, ascore, width, height, c_text)
+                return dynamic_call(CLIPTextEncodeSDXLRefiner, 'encode', 'execute')(c_clip, c_clip, ascore, width, height, c_text)
             else:
                 from nodes import CLIPTextEncode
-                return CLIPTextEncode().encode(c_clip, c_text)
+                return dynamic_call(CLIPTextEncode, 'encode', 'execute')(c_clip, c_text)
 
         def comfy_path(c_clip):
             if on_sdxl and class_name == "SDXLRefinerClipModel":
@@ -206,7 +194,7 @@ class smZ_CLIPTextEncode(BaseComfyNode):
                 model = lambda txt: h_clip.encode_from_tokens(h_clip.tokenize(txt), return_pooled=True, return_dict=True)
                 steps = max(smZ_steps, 1)
                 if on_sdxl and class_name == "SDXLClipModel":
-                    schedules = CLIPTextEncodeSDXL().encode(h_clip, width, height, crop_w, crop_h, target_width, target_height, [text_g], [text_l])[0]
+                    schedules = dynamic_call(CLIPTextEncodeSDXL, 'encode', 'execute')(h_clip, width, height, crop_w, crop_h, target_width, target_height, [text_g], [text_l])[0]
                 else:
                     schedules = get_learned_conditioning(model, [text], steps, multi_conditioning)
 
